@@ -1,0 +1,26 @@
+[package]
+name = "lutece"
+description = "Minimal core for window managers that run on both X11 and Wayland"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Serialize-only on purpose: deserializing must go through the validating constructors.
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "scene_diff"
+harness = false

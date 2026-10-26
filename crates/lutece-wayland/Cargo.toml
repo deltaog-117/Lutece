@@ -1,0 +1,12 @@
+[package]
+name = "lutece-wayland"
+description = "Wayland backend for lutece"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lutece = { path = "../lutece" }

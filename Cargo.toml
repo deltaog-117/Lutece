@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/lutece",
+    "crates/lutece-x11",
+    "crates/lutece-wayland",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["deltaog-117"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

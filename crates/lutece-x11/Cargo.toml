@@ -1,0 +1,12 @@
+[package]
+name = "lutece-x11"
+description = "X11 backend for lutece"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lutece = { path = "../lutece" }
