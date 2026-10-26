@@ -13,12 +13,12 @@ Author: deltaog-117
 - ✅ Feature-first Cargo workspace scaffold (`lutece`, `lutece-x11`, `lutece-wayland`)
 - ✅ Core contracts – `Event`, `Effect`, `Scene`, `diff`, geometry, ids and errors, with property tests and a `diff` benchmark
 - ✅ `scripts/check` – format, clippy and tests
+- ✅ Workspace and focus state – `StackSet` with zipper workspaces, focus, swap, tag switching and moving windows between workspaces, checked by model-based property tests
 
 ---
 
 ## 🔥 High Priority (Critical)
 
-- **Workspace and focus state** – `StackSet` with workspaces, focus and window ordering; invalid states unrepresentable.
 - **Layouts** – tile and monocle as pure functions from windows and an output rectangle to geometries.
 - **Display-free tests** – event-replay tests that feed a recorded event stream through `engine` and assert the resulting `Scene`.
 - **X11 backend** – `lutece-x11` translates X events into `Event` and applies `Scene` and `Effect` as X requests.
@@ -55,9 +55,8 @@ Author: deltaog-117
 
 ## 🎯 Next Actions (Immediate)
 
-1. **Build workspace state** – `crates/lutece/src/stack/{workspace,stackset}.rs` with unit and property tests.
-2. **Add layouts** – `crates/lutece/src/layout/{tile,monocle}.rs`.
-3. **Wire the engine** – `crates/lutece/src/engine/{handle,scene_builder}.rs` and the event-replay tests.
-4. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-5. **Add the nested dev script** – `scripts/dev-x11` to launch Xephyr and the example WM.
-6. **Start the X11 backend** – `crates/lutece-x11/src/{connection,translate,apply,grabs}.rs`.
+1. **Add layouts** – `crates/lutece/src/layout/{tile,monocle}.rs`.
+2. **Wire the engine** – `crates/lutece/src/engine/{handle,scene_builder}.rs` and the event-replay tests.
+3. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
+4. **Add the nested dev script** – `scripts/dev-x11` to launch Xephyr and the example WM (the example moves into `crates/lutece-x11/examples/`).
+5. **Start the X11 backend** – `crates/lutece-x11/src/{connection,translate,apply,grabs}.rs`.

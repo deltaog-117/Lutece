@@ -15,6 +15,7 @@
 | 2026-10-26 | Shape of the contracts | Closed set shared by both backends | ✅ Confirmed |
 | 2026-10-26 | Project split and names | lutece (library), lucarne (suckless WM), plugin WM (unnamed) | ✅ Confirmed |
 | 2026-10-26 | Dependencies | thiserror, optional serde (Serialize only), proptest and criterion (dev) | ✅ Confirmed |
+| 2026-10-26 | Workspace and focus state | Zipper per workspace, zipper over workspaces | ✅ Confirmed |
 
 ---
 
@@ -218,6 +219,64 @@ Names were chosen for being short and easy to type, in line with the minimalist 
 - `scripts/check` runs `cargo fmt --check`, clippy with `-D warnings`, and the tests, with `--all-features` so the serde feature is checked too.
 - The bench file allows `missing_docs` locally because `criterion_group!` generates an undocumented function. The workspace-wide lint stays on.
 - No baseline benchmark has been recorded yet; run `cargo bench -p lutece` to create one.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-26 | Initial entry | deltaog-117 |
+
+---
+
+### Workspace and focus state: zipper per workspace
+
+**Date:** 2026-10-26
+**Status:** Confirmed
+
+#### Context / Background
+
+The core has to know which windows are on which workspace and which one has focus. A window must be on exactly one workspace, and focus must never point at a window that is not there. Penrose's `Stack` (up, focus, down over two deques) and `StackSet` were read for reference.
+
+#### Options Considered
+
+**Option A: Zipper per workspace**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Focus is valid by the shape of the data; proven design (xmonad, Penrose) |
+| **Disadvantages** | Harder to read and write; the one-workspace rule still needs tests |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Best match for "invalid states unrepresentable" |
+
+**Option B: Ordered list plus focus id**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Simplest to read and extend |
+| **Disadvantages** | Focus can disagree with the list; only tests guard it |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Weaker on correctness |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+A focus bug in a window manager shows up as the wrong window being closed, so the guarantee is worth the extra complexity, which stays inside one module.
+
+#### Implementation Notes
+
+- `Stack` is a private zipper (`up`, `focus`, `down`); `Workspace` holds an `Option<Stack>`, so an empty workspace has no focus by construction.
+- `StackSet` is itself a zipper over workspaces (`before`, `current`, `after`), so a current workspace always exists. Switching rebuilds the split instead of using an index that could go out of range.
+- A new window takes focus and the old focus sits right after it. Removing the focused window passes focus to the next one, or to the previous one at the end. Focus and swap operations wrap around.
+- Sending the focused window to another workspace keeps the current workspace on screen, and the window becomes the focus of its new workspace.
+- Inserting a known window and removing or focusing an unknown one return errors instead of being ignored.
+- The one-workspace rule is kept by the methods, not the types. A model-based property test runs random operation sequences against a plain set of windows and checks it after every step.
+- No benchmark was added: `StackSet` operations run on user input with tens of windows, not on a measured hot path.
+- Multi-output support is left out of this cut; the private fields allow adding it later without breaking users.
+
+#### References
+
+- Penrose `src/pure/stack.rs` and `src/pure/stack_set.rs` (develop branch), read through a web fetch.
 
 #### Review / Update Log
 

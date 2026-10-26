@@ -1,9 +1,9 @@
-//! The single error type returned by every fallible constructor in the crate.
+//! The single error type returned by every fallible operation in the crate.
 
-use crate::shared::ids::WinId;
+use crate::shared::ids::{Tag, WinId};
 use thiserror::Error;
 
-/// Reasons a value was rejected at construction.
+/// Reasons a value was rejected or an operation refused.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
@@ -15,8 +15,8 @@ pub enum Error {
         /// The rejected height.
         height: u32,
     },
-    /// A scene lists each window at most once.
-    #[error("window {0:?} appears more than once in the scene")]
+    /// A scene or workspace set lists each window at most once.
+    #[error("window {0:?} is already present")]
     DuplicateWindow(WinId),
     /// Focus must point at a window the scene shows.
     #[error("focused window {0:?} is not in the scene")]
@@ -27,6 +27,21 @@ pub enum Error {
     /// Modifier bits outside the defined set.
     #[error("unknown modifier bits {0:#010b}")]
     UnknownModifierBits(u8),
+    /// A workspace tag needs visible text.
+    #[error("workspace tag must not be empty")]
+    EmptyTag,
+    /// Two workspaces cannot share a tag.
+    #[error("workspace tag {0} is used more than once")]
+    DuplicateTag(Tag),
+    /// A window manager needs at least one workspace.
+    #[error("at least one workspace is required")]
+    NoWorkspaces,
+    /// No workspace has this tag.
+    #[error("no workspace is tagged {0}")]
+    UnknownTag(Tag),
+    /// No workspace holds this window.
+    #[error("window {0:?} is not managed")]
+    UnknownWindow(WinId),
 }
 
 /// Result alias using the crate [`enum@Error`].
