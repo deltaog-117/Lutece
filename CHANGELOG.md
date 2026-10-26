@@ -21,3 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workspace operations on `StackSet`: switch by tag or by next/previous with wrap-around, send the focused window to another workspace
 - `Tag`, a workspace name that cannot be empty, and the errors `EmptyTag`, `DuplicateTag`, `NoWorkspaces`, `UnknownTag`, `UnknownWindow`
 - Model-based property test that runs random operation sequences and checks every window is on exactly one workspace and focus is always valid
+- `Layout` enum with `Tile` and `Monocle`, and `Layout::arrange`, which turns a window list and an output rectangle into placements
+- `MasterRatio`, the master column's share of the width in whole thousandths (1 to 999), so both columns always keep a pixel
+- Tile splits the right column evenly and gives leftover pixels to the first rows, so the rectangles cover the area exactly; monocle puts the focused window on top
+- Errors `InvalidRatio`, `AreaTooSmall` and `AreaOutOfRange`
+- Property tests for exact coverage, no overlap, window order, and no panic near the coordinate limit

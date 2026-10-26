@@ -14,12 +14,12 @@ Author: deltaog-117
 - ✅ Core contracts – `Event`, `Effect`, `Scene`, `diff`, geometry, ids and errors, with property tests and a `diff` benchmark
 - ✅ `scripts/check` – format, clippy and tests
 - ✅ Workspace and focus state – `StackSet` with zipper workspaces, focus, swap, tag switching and moving windows between workspaces, checked by model-based property tests
+- ✅ Layouts – closed `Layout` enum with tile (master ratio in whole thousandths) and monocle, checked by property tests for exact coverage
 
 ---
 
 ## 🔥 High Priority (Critical)
 
-- **Layouts** – tile and monocle as pure functions from windows and an output rectangle to geometries.
 - **Display-free tests** – event-replay tests that feed a recorded event stream through `engine` and assert the resulting `Scene`.
 - **X11 backend** – `lutece-x11` translates X events into `Event` and applies `Scene` and `Effect` as X requests.
 - **Minimal example WM** – `examples/minimal` shows a WM built from the library in a small `main.rs`.
@@ -55,8 +55,7 @@ Author: deltaog-117
 
 ## 🎯 Next Actions (Immediate)
 
-1. **Add layouts** – `crates/lutece/src/layout/{tile,monocle}.rs`.
-2. **Wire the engine** – `crates/lutece/src/engine/{handle,scene_builder}.rs` and the event-replay tests.
-3. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-4. **Add the nested dev script** – `scripts/dev-x11` to launch Xephyr and the example WM (the example moves into `crates/lutece-x11/examples/`).
-5. **Start the X11 backend** – `crates/lutece-x11/src/{connection,translate,apply,grabs}.rs`.
+1. **Wire the engine** – `crates/lutece/src/engine/{handle,scene_builder}.rs` and the event-replay tests.
+2. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
+3. **Add the nested dev script** – `scripts/dev-x11` to launch Xephyr and the example WM (the example moves into `crates/lutece-x11/examples/`).
+4. **Start the X11 backend** – `crates/lutece-x11/src/{connection,translate,apply,grabs}.rs`.

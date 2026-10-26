@@ -1,5 +1,6 @@
 //! The single error type returned by every fallible operation in the crate.
 
+use crate::shared::geometry::Rect;
 use crate::shared::ids::{Tag, WinId};
 use thiserror::Error;
 
@@ -42,6 +43,22 @@ pub enum Error {
     /// No workspace holds this window.
     #[error("window {0:?} is not managed")]
     UnknownWindow(WinId),
+    /// A master ratio must leave room for both the master and the rest.
+    #[error("master ratio must be 1..=999 per mille, got {0}")]
+    InvalidRatio(u16),
+    /// Every window needs at least one pixel in each direction.
+    #[error("a {width}x{height} area cannot hold {windows} tiled windows")]
+    AreaTooSmall {
+        /// How many windows were to be placed.
+        windows: usize,
+        /// Width of the area.
+        width: u32,
+        /// Height of the area.
+        height: u32,
+    },
+    /// The area's far edges do not fit the coordinate range.
+    #[error("area {0:?} extends beyond the coordinate range")]
+    AreaOutOfRange(Rect),
 }
 
 /// Result alias using the crate [`enum@Error`].

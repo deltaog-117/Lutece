@@ -16,6 +16,7 @@
 | 2026-10-26 | Project split and names | lutece (library), lucarne (suckless WM), plugin WM (unnamed) | ✅ Confirmed |
 | 2026-10-26 | Dependencies | thiserror, optional serde (Serialize only), proptest and criterion (dev) | ✅ Confirmed |
 | 2026-10-26 | Workspace and focus state | Zipper per workspace, zipper over workspaces | ✅ Confirmed |
+| 2026-10-26 | Layout representation | Closed enum with one `arrange` entry point | ✅ Confirmed |
 
 ---
 
@@ -277,6 +278,71 @@ A focus bug in a window manager shows up as the wrong window being closed, so th
 #### References
 
 - Penrose `src/pure/stack.rs` and `src/pure/stack_set.rs` (develop branch), read through a web fetch.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-26 | Initial entry | deltaog-117 |
+
+---
+
+### Layout representation: closed enum
+
+**Date:** 2026-10-26
+**Status:** Confirmed
+
+#### Context / Background
+
+A layout turns the windows of a workspace and an output rectangle into one rectangle per window. How a layout is represented is part of the public interface, which lucarne and the plugin WM will build on.
+
+#### Options Considered
+
+**Option A: Free functions**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Simplest, nothing new to maintain |
+| **Disadvantages** | A workspace cannot remember or switch its layout without a selector, which is option B built later |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Fine, but incomplete |
+
+**Option B: Closed enum with one `arrange` entry point**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Comparable and copyable value, exhaustive matching, easy switching and testing |
+| **Disadvantages** | Adding a layout means editing the enum |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Matches the pure core and the model-based tests |
+
+**Option C: Trait with implementations**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Other crates can add layouts without forking |
+| **Disadvantages** | `Box<dyn Layout>` has no free `Clone`/`Eq`/`Serialize`, loses exhaustive matching, adds allocation |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Open extension is not needed: lucarne is edited and recompiled, the plugin WM speaks a protocol |
+
+#### Decision & Rationale
+
+**Chosen Option:** B.
+
+Keeping a layout a plain value fits the pure core. If open extension is ever needed, a `Custom(fn(..))` variant can be added without losing `Clone` and `Eq`.
+
+#### Implementation Notes
+
+- `MasterRatio` is whole thousandths in `1..=999` instead of a float, so layouts stay `Eq` and `Hash` and the pixel maths is exact. The master width is clamped so both columns keep at least one pixel.
+- Tile divides the column height evenly and gives the leftover pixels one each to the first rows, so the rectangles cover the area exactly.
+- `Size` cannot be zero, so an area with fewer pixels than the layout needs returns `AreaTooSmall` instead of producing zero-size windows. An area reaching past `i32::MAX` returns `AreaOutOfRange` instead of wrapping.
+- Monocle puts the focused window last (on top) and cannot fail, because every window gets the area unchanged.
+- `Tile` holds a `MasterRatio` directly; a one-field params struct would add nothing yet. No gaps, borders or master count in this cut.
+- No benchmark was added: layouts run once per event on a handful of windows, not on a measured hot path.
+
+#### References
+
+- None beyond the existing contracts.
 
 #### Review / Update Log
 
