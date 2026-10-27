@@ -1,0 +1,42 @@
+#!/bin/sh
+# Run the example WM inside Xephyr, nested in the current session.
+# Usage: scripts/dev-x11 [display]   (default :2; start clients with DISPLAY=:2 xterm)
+set -eu
+
+cd "$(dirname "$0")/.."
+
+display="${1:-:2}"
+screen="${LUTECE_SCREEN:-1280x720}"
+
+for tool in Xephyr xdpyinfo; do
+    command -v "$tool" >/dev/null || {
+        echo "dev-x11: $tool not found in PATH" >&2
+        exit 1
+    }
+done
+
+# Build first so compile time is not spent waiting on a half-started server.
+cargo build --quiet -p lutece-x11 --example minimal
+
+Xephyr "$display" -screen "$screen" -resizeable &
+xephyr_pid=$!
+trap 'kill "$xephyr_pid" 2>/dev/null || true' EXIT INT TERM
+
+# Xephyr accepts connections a moment after it forks; bail out if it died instead
+# (typically because the display number is taken).
+tries=0
+until DISPLAY="$display" xdpyinfo >/dev/null 2>&1; do
+    kill -0 "$xephyr_pid" 2>/dev/null || {
+        echo "dev-x11: Xephyr exited; is display $display already in use?" >&2
+        exit 1
+    }
+    tries=$((tries + 1))
+    [ "$tries" -le 50 ] || {
+        echo "dev-x11: Xephyr did not come up on $display" >&2
+        exit 1
+    }
+    sleep 0.1
+done
+
+echo "dev-x11: WM running on $display; start clients with DISPLAY=$display xterm" >&2
+DISPLAY="$display" cargo run --quiet -p lutece-x11 --example minimal

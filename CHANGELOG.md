@@ -37,3 +37,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Property tests for event translation and for scene application against a fake server
 - Dependencies for `lutece-x11`: `x11rb`, `thiserror` (and `proptest` for tests)
 - `minimal` example (`cargo run -p lutece-x11 --example minimal`): a window manager in one file that tiles every window on a single workspace; stop it with Ctrl-C or by closing the nested X server
+- `scripts/dev-x11 [display]`: builds the `minimal` example, starts Xephyr on a spare display (default `:2`, size from `LUTECE_SCREEN`), waits for it, runs the window manager in it and stops Xephyr on exit

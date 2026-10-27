@@ -20,6 +20,7 @@
 | 2026-10-27 | Engine interface | Stateful engine, scene derived on request | ✅ Confirmed |
 | 2026-10-27 | X11 backend loop | Caller drives the loop; backend translates and applies | ✅ Confirmed |
 | 2026-10-27 | Minimal example exit | Plain loop, stopped from outside | ✅ Confirmed |
+| 2026-10-27 | Nested dev environment | POSIX shell script around Xephyr, fixed spare display | ✅ Confirmed |
 
 ---
 
@@ -519,6 +520,34 @@ It stays inside the roadmap item and adds no interface that would be hard to und
 #### References
 
 - X11 backend entry above.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-27 | Initial entry | deltaog-117 |
+
+---
+
+### Nested dev environment: `scripts/dev-x11`
+
+**Date:** 2026-10-27
+**Status:** Confirmed
+
+#### Context / Background
+
+The example window manager has to be tried on a real X server, but the host session is Hyprland and the WM must not run on it. Xephyr opens an X server as a window inside the current session, so no logout is needed.
+
+#### Decision & Rationale
+
+**Chosen Option:** a POSIX `sh` script, in the style of `scripts/check`, with a fixed spare display (`:2`, overridable by argument).
+
+Only one approach was credible, so no options were compared. A fixed display keeps the commands in the docs and the example valid; auto-picking a free number would make `DISPLAY=:2 xterm` wrong. The script builds first, waits until `xdpyinfo` can connect instead of sleeping a fixed time, and stops Xephyr through a trap, so a Ctrl-C or a WM crash leaves no stray server.
+
+#### Implementation Notes
+
+- If the display is taken, Xephyr exits and the script reports it instead of waiting.
+- Smoke-tested on `:7` with a timeout: Xephyr came up, the WM ran, and no Xephyr was left afterwards. The tiled geometry is still unchecked by eye; that belongs to the scripted X11 integration tests.
 
 #### Review / Update Log
 

@@ -18,12 +18,13 @@ Author: deltaog-117
 - ✅ X11 backend – `lutece-x11` translates X events into `Event` and applies `Scene` and `Effect` as X requests, with the caller owning the loop; key grabs, existing windows and several outputs come later
 - ✅ Engine and display-free tests – `Engine::handle` applies events, `Engine::scene` derives the scene, checked by event-replay tests and a property test over random event streams
 - ✅ Minimal example WM – `crates/lutece-x11/examples/minimal.rs` wires `Engine` to `X11Backend` in a short `main.rs`; it has no keys yet, so it is stopped from outside
+- ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
 
 ## 🔥 High Priority (Critical)
 
-- **Nested dev environment** – script to run the example WM inside Xephyr under a Hyprland session, so testing needs no logout.
+- None at the moment.
 
 ---
 
@@ -57,5 +58,4 @@ Author: deltaog-117
 ## 🎯 Next Actions (Immediate)
 
 1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Add the nested dev script** – `scripts/dev-x11` to launch Xephyr and the example WM (`cargo run -p lutece-x11 --example minimal`).
-3. **Add key bindings** – so the example can quit, spawn a program and move focus.
+2. **Add key bindings** – so the example can quit, spawn a program and move focus.
