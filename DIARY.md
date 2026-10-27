@@ -19,6 +19,7 @@
 | 2026-10-26 | Layout representation | Closed enum with one `arrange` entry point | ✅ Confirmed |
 | 2026-10-27 | Engine interface | Stateful engine, scene derived on request | ✅ Confirmed |
 | 2026-10-27 | X11 backend loop | Caller drives the loop; backend translates and applies | ✅ Confirmed |
+| 2026-10-27 | Minimal example exit | Plain loop, stopped from outside | ✅ Confirmed |
 
 ---
 
@@ -478,6 +479,46 @@ It keeps the backend a thin translator and lets the plugin WM poll its socket ne
 #### References
 
 - Engine interface entry above.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-27 | Initial entry | deltaog-117 |
+
+---
+
+### Minimal example exit: plain loop, stopped from outside
+
+**Date:** 2026-10-27
+**Status:** Confirmed
+
+#### Context / Background
+
+The example window manager had to be a short `main.rs` wiring `Engine` to `X11Backend`. The engine ignores key presses and `handle` returns no effects, so nothing in the library can produce `Quit` or `Spawn` yet. The question was how the example ends.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A: Plain loop, stop from outside | No library change; matches the crate docs | No quit or spawn from inside the WM | S |
+| B: Plain loop, exit when the last window closes | Terminates in scripted runs | Example-only rule that can surprise | S |
+| C: Pull minimal key bindings forward | Quit, spawn and focus keys now | Hard-to-undo interface; takes over a Medium item | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+It stays inside the roadmap item and adds no interface that would be hard to undo. Key bindings get their own design pass, and the example gains quit and spawn keys afterwards. B can be added in a few lines if scripted tests need a run that ends by itself.
+
+#### Implementation Notes
+
+- The example lives in `crates/lutece-x11/examples/minimal.rs`, because a workspace root with no package cannot build examples. The empty `examples/minimal/main.rs` was removed.
+- Smoke-tested in Xephyr: it starts and runs without errors. The tiled geometry was not confirmed by eye, because `xterm` could not load fonts on this machine; `xeyes` or `xclock` would work.
+
+#### References
+
+- X11 backend entry above.
 
 #### Review / Update Log
 
