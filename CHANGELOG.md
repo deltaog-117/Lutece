@@ -26,3 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tile splits the right column evenly and gives leftover pixels to the first rows, so the rectangles cover the area exactly; monocle puts the focused window on top
 - Errors `InvalidRatio`, `AreaTooSmall` and `AreaOutOfRange`
 - Property tests for exact coverage, no overlap, window order, and no panic near the coordinate limit
+- `Engine`: `handle` applies a backend `Event` to the workspaces and screen and returns the `Effect`s to carry out; `scene` derives the `Scene` to show from the current state
+- Events that no longer apply (a close or focus request for an unknown window, a duplicate open) are ignored; key presses do nothing until key bindings exist
+- Event-replay integration tests and a property test over random event streams, checking every open window is on exactly one workspace and the scene matches the current workspace

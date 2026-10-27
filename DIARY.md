@@ -17,6 +17,7 @@
 | 2026-10-26 | Dependencies | thiserror, optional serde (Serialize only), proptest and criterion (dev) | ✅ Confirmed |
 | 2026-10-26 | Workspace and focus state | Zipper per workspace, zipper over workspaces | ✅ Confirmed |
 | 2026-10-26 | Layout representation | Closed enum with one `arrange` entry point | ✅ Confirmed |
+| 2026-10-27 | Engine interface | Stateful engine, scene derived on request | ✅ Confirmed |
 
 ---
 
@@ -349,3 +350,67 @@ Keeping a layout a plain value fits the pure core. If open extension is ever nee
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-10-26 | Initial entry | deltaog-117 |
+
+---
+
+### Engine interface: stateful engine, scene derived on request
+
+**Date:** 2026-10-27
+**Status:** Confirmed
+
+#### Context / Background
+
+The engine takes a backend's events, updates the window-manager state and produces the scene and effects. Its call shape is the interface every backend, lucarne and the plugin WM will depend on, so it is hard to change later.
+
+#### Options Considered
+
+**Option A: Stateful engine, scene on request**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | The scene is always derived from the state, so it cannot drift; matches the `&mut self` style of `StackSet`; smallest interface |
+| **Disadvantages** | Each backend keeps its own last scene and calls `diff` |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Tests assert directly on a `Scene`, as the roadmap asks |
+
+**Option B: Engine that returns ready-to-apply changes**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Backends are minimal |
+| **Disadvantages** | The engine's memory of the last scene can disagree with the real screen after a failed apply or a reconnect; needs a full-scene call anyway; the diff becomes part of the contract |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Stores a second copy of the truth |
+
+**Option C: Pure step function over a state value**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Rollback and replay come free |
+| **Disadvantages** | Breaks the `&mut self` style of the crate; clones or moves the state per event; rollback has no consumer yet |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Possible later as a wrapper |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+Deriving the scene from the state removes a whole class of drift bugs, and B's convenience can be added later as a thin wrapper around A, while going from B back to A would break the interface.
+
+#### Implementation Notes
+
+- Layout lives in the engine, not in `StackSet`, so `stack` stays independent of `layout` (Delete Test). One layout serves every workspace until an event can change it.
+- Events that no longer apply are ignored, not reported: backends see close and focus events for windows they already lost, and a duplicate open is harmless.
+- `KeyPressed` does nothing until key bindings exist, so no event yields an `Effect` yet. `handle` still returns them so adding bindings does not change its signature.
+- The first output is the screen; an empty output set leaves an empty scene. Multi-output is a later item.
+- `scene` returns a `Result`, because a layout refuses a screen too small for its windows; the backend decides what to do.
+
+#### References
+
+- Core and backend boundary entry above.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-27 | Initial entry | deltaog-117 |
