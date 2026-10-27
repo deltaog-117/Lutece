@@ -10,3 +10,8 @@ workspace = true
 
 [dependencies]
 lutece = { path = "../lutece" }
+thiserror = "2"
+x11rb = "0.14"
+
+[dev-dependencies]
+proptest = "1"

@@ -18,6 +18,7 @@
 | 2026-10-26 | Workspace and focus state | Zipper per workspace, zipper over workspaces | ✅ Confirmed |
 | 2026-10-26 | Layout representation | Closed enum with one `arrange` entry point | ✅ Confirmed |
 | 2026-10-27 | Engine interface | Stateful engine, scene derived on request | ✅ Confirmed |
+| 2026-10-27 | X11 backend loop | Caller drives the loop; backend translates and applies | ✅ Confirmed |
 
 ---
 
@@ -213,6 +214,8 @@ Names were chosen for being short and easy to type, in line with the minimalist 
 | `serde` (optional feature) | runtime, off by default | Lets `Event` and `Effect` be serialized for the plugin WM later; Serialize only, because deserializing must go through the validating constructors |
 | `proptest` | dev | Property tests, required by the manifesto |
 | `criterion` | dev | Benchmark of `diff`, the first likely hot path |
+| `x11rb` | runtime, `lutece-x11` only | Pure-Rust X11 client (no C library, no `unsafe` needed), added 2026-10-27 with the X11 backend |
+| `thiserror`, `proptest` | `lutece-x11` | Same roles as in the core |
 
 `criterion` was not in the list shown for approval; it is dev-only and easy to drop.
 
@@ -408,6 +411,73 @@ Deriving the scene from the state removes a whole class of drift bugs, and B's c
 #### References
 
 - Core and backend boundary entry above.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-27 | Initial entry | deltaog-117 |
+
+---
+
+### X11 backend: the caller drives the loop
+
+**Date:** 2026-10-27
+**Status:** Confirmed
+
+#### Context / Background
+
+The backend reads X events, turns them into `Event`s, and applies the engine's `Scene` and `Effect`s as X requests. The open question was who owns the loop that does this.
+
+#### Options Considered
+
+**Option A: Backend owns the loop**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Smallest example WM: one call |
+| **Disadvantages** | No place for other inputs (plugin socket, timers); adding one later breaks the interface |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Hides the loop the core was designed to leave to the caller |
+
+**Option B: Caller drives the loop**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Testable without a running loop; other inputs can share a `poll` through `AsFd`; Wayland can follow the same shape |
+| **Disadvantages** | About 15 more lines in every WM; the caller can get the loop order wrong |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Matches events-in, scene-out |
+
+**Option C: `calloop` event source**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | Same loop style as Smithay; built-in timers |
+| **Disadvantages** | Heavy dependency and callback style before X11 has run once |
+| **Implementation Difficulty** | Hard |
+| **Fit with Constraints** | Premature; can be layered on B later through `AsFd` |
+
+#### Decision & Rationale
+
+**Chosen Option:** B.
+
+It keeps the backend a thin translator and lets the plugin WM poll its socket next to X. The library choice (`x11rb`, pure-Rust connection) was settled without options: it needs no C library and works with `unsafe_code = "forbid"`.
+
+#### Implementation Notes
+
+- `X11Backend` has `next_events` (blocks), `pending_events` (no wait), `apply_scene`, `apply_effects` and `AsFd`. It remembers the last scene it showed and applies the `diff` itself.
+- `plan` (changes to requests) and `translate` (X event to `Event`) take no connection, so they are checked by property tests: a fake server reaches every scene of a random sequence, and opens and closes alternate for every window.
+- X reports a window we unmapped exactly like one the client withdrew. `Windows` counts the unmaps our own hides will cause so only client unmaps become `WindowClosed`; `forget` clears everything for a window so a reused X id starts clean.
+- A `ConfigureRequest` from a managed window is ignored (the layout sizes it); from an unmanaged window it is passed through.
+- Close sends `WM_DELETE_WINDOW` if the client lists it, else kills the client. Spawned children are reaped by a waiting thread.
+- Requests for windows that vanished fail on the server and come back as error events, which are ignored.
+- Smoke-tested by hand in Xephyr with xterm: the backend became the WM, adopted the window with its title and class, tiled it full screen and focused it.
+- Left for later: adopting windows that exist before the WM starts, `grabs.rs` (with key bindings), several outputs through RandR, and automated tests against a real server (Xvfb item).
+
+#### References
+
+- Engine interface entry above.
 
 #### Review / Update Log
 
