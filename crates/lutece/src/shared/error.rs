@@ -1,5 +1,6 @@
 //! The single error type returned by every fallible operation in the crate.
 
+use crate::shared::contracts::event::KeyPress;
 use crate::shared::geometry::Rect;
 use crate::shared::ids::{Tag, WinId};
 use thiserror::Error;
@@ -25,6 +26,9 @@ pub enum Error {
     /// A spawn effect needs a program to run.
     #[error("spawn command has an empty program name")]
     EmptyProgram,
+    /// A key combination triggers one action only.
+    #[error("key combination {0:?} is already bound")]
+    DuplicateBinding(KeyPress),
     /// Modifier bits outside the defined set.
     #[error("unknown modifier bits {0:#010b}")]
     UnknownModifierBits(u8),

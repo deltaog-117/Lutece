@@ -2,9 +2,10 @@
 
 use crate::apply::{Flow, execute, plan, run_effects};
 use crate::error::{Error, Result};
-use crate::translate::translate;
+use crate::grabs::{Keyboard, grab_keys};
+use crate::translate::{key_press, translate};
 use crate::windows::Windows;
-use lutece::{Effect, Event, Output, OutputId, Rect, Scene, WindowInfo, diff};
+use lutece::{Effect, Event, KeyPress, Output, OutputId, Rect, Scene, WindowInfo, diff};
 use std::mem;
 use std::os::fd::{AsFd, BorrowedFd};
 use x11rb::connection::Connection;
@@ -39,6 +40,7 @@ pub struct X11Backend {
     conn: RustConnection,
     root: Window,
     atoms: Atoms,
+    keyboard: Keyboard,
     windows: Windows,
     /// What the X server is showing, so a new scene is applied as a difference.
     shown: Scene,
@@ -66,6 +68,7 @@ impl X11Backend {
             u32::from(screen.height_in_pixels),
         )?;
         let atoms = Atoms::new(&conn)?.reply()?;
+        let keyboard = Keyboard::fetch(&conn)?;
 
         let redirect = ChangeWindowAttributesAux::new()
             .event_mask(EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY);
@@ -84,6 +87,7 @@ impl X11Backend {
             conn,
             root,
             atoms,
+            keyboard,
             windows: Windows::default(),
             shown: Scene::empty(),
             queued: vec![Event::OutputsChanged(vec![output])],
@@ -117,6 +121,24 @@ impl X11Backend {
         Ok(mem::take(&mut self.queued))
     }
 
+    /// Grabs `presses` on the whole screen, so each press reaches the core as an
+    /// [`Event::KeyPressed`] whichever window has the focus. Pass it the engine's
+    /// `grabs()`. CapsLock and NumLock do not stop a press from matching.
+    ///
+    /// A key is named by what it produces without Shift: grab Super+Shift+q as the
+    /// keysym of `q` with the Shift modifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnmappedKeysym`] if no key on the keyboard produces a keysym,
+    /// [`Error::KeyAlreadyGrabbed`] if another client holds a combination, or an error
+    /// if the connection to the X server breaks.
+    pub fn grab_keys(&mut self, presses: impl IntoIterator<Item = KeyPress>) -> Result<()> {
+        grab_keys(&self.conn, &self.keyboard, self.root, presses)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// Makes the screen show `scene`, sending only what differs from what is shown.
     ///
     /// # Errors
@@ -145,10 +167,16 @@ impl X11Backend {
         let Self {
             conn,
             atoms,
+            keyboard,
             windows,
             queued,
             ..
         } = self;
+
+        if let XEvent::KeyPress(press) = event {
+            queued.extend(key_press(keyboard, press));
+            return Ok(());
+        }
 
         if let XEvent::ConfigureRequest(request) = event {
             // A managed window is sized by the layout, so its own request is refused. A

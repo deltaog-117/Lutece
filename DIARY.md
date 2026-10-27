@@ -21,6 +21,7 @@
 | 2026-10-27 | X11 backend loop | Caller drives the loop; backend translates and applies | ✅ Confirmed |
 | 2026-10-27 | Minimal example exit | Plain loop, stopped from outside | ✅ Confirmed |
 | 2026-10-27 | Nested dev environment | POSIX shell script around Xephyr, fixed spare display | ✅ Confirmed |
+| 2026-10-27 | Key bindings | Engine-owned keymap with a closed `Action` enum | ✅ Confirmed |
 
 ---
 
@@ -548,6 +549,48 @@ Only one approach was credible, so no options were compared. A fixed display kee
 
 - If the display is taken, Xephyr exits and the script reports it instead of waiting.
 - Smoke-tested on `:7` with a timeout: Xephyr came up, the WM ran, and no Xephyr was left afterwards. The tiled geometry is still unchecked by eye; that belongs to the scripted X11 integration tests.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-27 | Initial entry | deltaog-117 |
+
+---
+
+### Key bindings: engine-owned keymap with a closed `Action` enum
+
+**Date:** 2026-10-27
+**Status:** Confirmed
+
+#### Context / Background
+
+`Event::KeyPressed` existed but did nothing. The core needed a way to say which key does what, the backend needed to know which keys to grab, and the example needed to quit, spawn and move focus.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Keymap owned by the engine, closed `Action` enum | Replayable and property-testable; one path for X11 and Wayland | A new action means a new variant | M |
+| B. Keymap owned by the host, plus a public `Engine::apply` | Modal bindings are possible | Glue repeated in every host; weaker replay coverage | M |
+| C. Matching keys in the example only | Smallest change | Logic duplicated for Wayland; untestable; against the architecture | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+It matches what the `KeyPressed` event already promised ("a key combination the core asked the backend to grab"), and key presses replay through `Engine::handle` like every other event. B only wins if modal bindings become a firm requirement, and `Engine::apply` can be added later without breaking A.
+
+#### Implementation Notes
+
+- A binding names the key by what it produces without Shift, so Super+Shift+q is the keysym of `q` plus the Shift modifier. The backend looks up the first column of the keyboard mapping, as dwm does.
+- Each key is grabbed four times (plain, CapsLock, NumLock, both), because X matches grabs on the exact modifier mask. NumLock is assumed to be Mod2.
+- The keymap is a `Vec` in binding order, not a hash map: grabs happen in a stable order and a WM has a few dozen bindings.
+- `ViewTag` and `MoveToTag` with an unknown tag are ignored, like other requests that no longer apply.
+- `SwapMaster` from the plan became `SwapNext` and `SwapPrev`, because those are the swap operations `StackSet` has. A swap-with-master operation can be added to `StackSet` and `Action` later.
+- A unit test caught a bug: looking up keysym 0 ("no symbol") matched every unused key slot. It now names no key.
+- Smoke-tested in Xephyr: the grabs succeed and the WM runs. Sending real key presses was not tested, because `xdotool` is not installed; that belongs to the scripted X11 integration tests.
+- Not done: the keycode table is read once. Changing the keyboard layout while running needs `MappingNotify` handling (added to the roadmap).
 
 #### Review / Update Log
 

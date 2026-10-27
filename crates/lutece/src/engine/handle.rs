@@ -1,6 +1,7 @@
 //! Applying one event to the engine's state.
 
 use super::Engine;
+use crate::input::Action;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::event::Event;
 
@@ -9,12 +10,14 @@ impl Engine {
     ///
     /// Events that no longer apply are ignored, not reported: a backend sees close and
     /// focus events for windows it has already lost, and a duplicate open is harmless.
-    /// Key presses do nothing until key bindings exist, so no event produces an effect
-    /// yet; the return type is here so adding bindings does not change this signature.
+    /// A key press runs the action bound to it in the engine's keymap, and a press with
+    /// no binding does nothing. Only some actions produce effects: quitting, closing the
+    /// focused window and spawning a program.
     ///
     /// The first output is the screen windows are laid out on. An empty set of outputs
     /// leaves nothing to show.
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
+        let mut effects = Vec::new();
         match event {
             Event::WindowOpened { id, .. } => {
                 // A window that is already managed stays where it is.
@@ -28,11 +31,35 @@ impl Engine {
                 // Not managed (never opened, or just closed): nothing to focus.
                 let _ = self.stacks.focus_window(id);
             }
-            Event::KeyPressed(_) => {}
+            Event::KeyPressed(press) => {
+                if let Some(action) = self.keymap.action(press).cloned() {
+                    self.run(action, &mut effects);
+                }
+            }
             Event::OutputsChanged(outputs) => {
                 self.screen = outputs.first().map(|output| output.rect);
             }
         }
-        Vec::new()
+        effects
+    }
+
+    fn run(&mut self, action: Action, effects: &mut Vec<Effect>) {
+        match action {
+            Action::Quit => effects.push(Effect::Quit),
+            Action::Close => effects.extend(self.stacks.focused().map(Effect::Close)),
+            Action::Spawn(command) => effects.push(Effect::Spawn(command)),
+            Action::FocusNext => self.stacks.focus_next(),
+            Action::FocusPrev => self.stacks.focus_prev(),
+            Action::SwapNext => self.stacks.swap_next(),
+            Action::SwapPrev => self.stacks.swap_prev(),
+            // A tag nobody has (a binding written for another set of workspaces) is
+            // ignored, like any other request that no longer applies.
+            Action::ViewTag(tag) => {
+                let _ = self.stacks.focus_tag(&tag);
+            }
+            Action::MoveToTag(tag) => {
+                let _ = self.stacks.move_focused_to(&tag);
+            }
+        }
     }
 }

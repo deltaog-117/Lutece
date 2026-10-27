@@ -1,8 +1,8 @@
 //! Recorded event streams replayed through the engine, with the resulting scene checked.
 
 use lutece::{
-    Change, Engine, Error, Event, KeyPress, Keysym, Layout, Modifiers, Output, OutputId, Rect,
-    Scene, StackSet, Tag, WinId, WindowInfo, diff,
+    Action, Change, Effect, Engine, Error, Event, KeyPress, Keymap, Keysym, Layout, Modifiers,
+    Output, OutputId, Rect, Scene, SpawnCommand, StackSet, Tag, WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -233,6 +233,9 @@ fn arbitrary_event() -> impl Strategy<Value = Event> {
         (0u64..8).prop_map(open),
         (0u64..8).prop_map(|n| Event::WindowClosed(w(n))),
         (0u64..8).prop_map(|n| Event::FocusRequested(w(n))),
+        // Bound keys that move focus, windows and workspaces, an unbound one, and the
+        // effect-only actions.
+        prop::sample::select(keymap().presses().collect::<Vec<_>>()).prop_map(Event::KeyPressed),
         Just(Event::KeyPressed(KeyPress {
             keysym: Keysym(0x61),
             modifiers: Modifiers::SUPER,
@@ -255,7 +258,7 @@ proptest! {
         stacks.insert(w(1)).expect("new window");
         stacks.focus_tag(&tag("1")).expect("workspace exists");
 
-        let mut engine = Engine::new(stacks, Layout::default());
+        let mut engine = Engine::new(stacks, Layout::default()).with_keymap(keymap());
         let mut model = Model { open: BTreeSet::from([0, 1]), has_screen: false };
 
         for event in events {
@@ -283,4 +286,119 @@ proptest! {
             }
         }
     }
+}
+
+fn key(c: char, modifiers: Modifiers) -> KeyPress {
+    KeyPress {
+        keysym: Keysym::from_char(c).expect("test keys are printable"),
+        modifiers,
+    }
+}
+
+fn pressed(c: char, modifiers: Modifiers) -> Event {
+    Event::KeyPressed(key(c, modifiers))
+}
+
+fn keymap() -> Keymap {
+    let mut keymap = Keymap::new();
+    let shift = Modifiers::SUPER | Modifiers::SHIFT;
+    let binds = [
+        (key('q', shift), Action::Quit),
+        (key('c', shift), Action::Close),
+        (
+            key('t', Modifiers::SUPER),
+            Action::Spawn(SpawnCommand::try_new("xterm", Vec::<String>::new()).expect("program")),
+        ),
+        (key('j', Modifiers::SUPER), Action::FocusNext),
+        (key('k', Modifiers::SUPER), Action::FocusPrev),
+        (key('2', Modifiers::SUPER), Action::ViewTag(tag("2"))),
+        (key('2', shift), Action::MoveToTag(tag("2"))),
+        (key('9', Modifiers::SUPER), Action::ViewTag(tag("9"))),
+        (key('l', Modifiers::SUPER), Action::SwapNext),
+        (key('h', Modifiers::SUPER), Action::SwapPrev),
+    ];
+    for (press, action) in binds {
+        keymap.bind(press, action).expect("distinct bindings");
+    }
+    keymap
+}
+
+fn bound_engine() -> Engine {
+    engine().with_keymap(keymap())
+}
+
+#[test]
+fn the_engine_lists_the_keys_to_grab() {
+    let engine = bound_engine();
+    assert_eq!(engine.grabs().count(), 10);
+    assert_eq!(
+        engine.grabs().next(),
+        Some(key('q', Modifiers::SUPER | Modifiers::SHIFT))
+    );
+    assert_eq!(self::engine().grabs().count(), 0);
+}
+
+#[test]
+fn quit_spawn_and_close_come_back_as_effects() {
+    let mut engine = bound_engine();
+    let shift = Modifiers::SUPER | Modifiers::SHIFT;
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+
+    assert_eq!(engine.handle(pressed('q', shift)), [Effect::Quit]);
+    assert_eq!(engine.handle(pressed('c', shift)), [Effect::Close(w(2))]);
+    let spawned = engine.handle(pressed('t', Modifiers::SUPER));
+    assert!(matches!(spawned.as_slice(), [Effect::Spawn(cmd)] if cmd.program() == "xterm"));
+}
+
+#[test]
+fn closing_with_nothing_focused_does_nothing() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600)]);
+    assert!(
+        engine
+            .handle(pressed('c', Modifiers::SUPER | Modifiers::SHIFT))
+            .is_empty()
+    );
+}
+
+#[test]
+fn focus_keys_move_the_focus_and_wrap() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+    assert_eq!(scene(&engine).focus(), Some(w(2)));
+
+    assert!(engine.handle(pressed('j', Modifiers::SUPER)).is_empty());
+    let after_next = scene(&engine).focus();
+    engine.handle(pressed('k', Modifiers::SUPER));
+    assert_ne!(scene(&engine).focus(), after_next);
+    assert_eq!(scene(&engine).focus(), Some(w(2)));
+}
+
+#[test]
+fn tag_keys_switch_and_move_windows_and_ignore_unknown_tags() {
+    let mut engine = bound_engine();
+    let shift = Modifiers::SUPER | Modifiers::SHIFT;
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+
+    engine.handle(pressed('2', shift));
+    assert!(scene(&engine).placements().is_empty());
+    assert_eq!(engine.stacks().tag_of(w(1)).map(Tag::as_str), Some("2"));
+
+    engine.handle(pressed('2', Modifiers::SUPER));
+    assert_eq!(engine.stacks().current().tag().as_str(), "2");
+    assert_eq!(ids(&scene(&engine)), [1]);
+
+    let before = engine.clone();
+    engine.handle(pressed('9', Modifiers::SUPER));
+    assert_eq!(engine, before);
+}
+
+#[test]
+fn a_press_that_is_not_bound_changes_nothing() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    let before = engine.clone();
+    assert!(engine.handle(pressed('j', Modifiers::NONE)).is_empty());
+    assert!(engine.handle(pressed('z', Modifiers::SUPER)).is_empty());
+    assert_eq!(engine, before);
 }

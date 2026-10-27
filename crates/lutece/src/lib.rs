@@ -5,11 +5,13 @@
 //! event stream behave identically on every backend.
 
 pub mod engine;
+pub mod input;
 pub mod layout;
 pub mod shared;
 pub mod stack;
 
 pub use engine::Engine;
+pub use input::{Action, Keymap};
 pub use layout::{Layout, MasterRatio};
 pub use shared::contracts::effect::{Effect, SpawnCommand};
 pub use shared::contracts::event::{Event, KeyPress, Keysym, Modifiers, Output, WindowInfo};

@@ -56,6 +56,24 @@ pub struct Output {
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Keysym(pub u32);
 
+impl Keysym {
+    /// The Return (Enter) key.
+    pub const RETURN: Self = Self(0xff0d);
+
+    /// The keysym of a printable Latin-1 character, such as `'q'` or `'1'`. For these
+    /// characters the keysym number is the character's code point. The lowercase letter
+    /// names the key; Shift is a modifier.
+    ///
+    /// Returns `None` for control characters and anything beyond Latin-1.
+    #[must_use]
+    pub const fn from_char(c: char) -> Option<Self> {
+        match c as u32 {
+            raw @ (0x20..=0x7e | 0xa0..=0xff) => Some(Self(raw)),
+            _ => None,
+        }
+    }
+}
+
 /// Modifier keys held during a key press. Only defined bits can be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -137,6 +155,17 @@ mod tests {
             let both = a | b;
             prop_assert!(both.contains(a));
             prop_assert!(both.contains(b));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn from_char_accepts_exactly_the_printable_latin_1(c in any::<char>()) {
+            let printable = matches!(c as u32, 0x20..=0x7e | 0xa0..=0xff);
+            prop_assert_eq!(Keysym::from_char(c).is_some(), printable);
+            if let Some(keysym) = Keysym::from_char(c) {
+                prop_assert_eq!(keysym.0, c as u32);
+            }
         }
     }
 

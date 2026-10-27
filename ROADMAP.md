@@ -15,9 +15,10 @@ Author: deltaog-117
 - ✅ `scripts/check` – format, clippy and tests
 - ✅ Workspace and focus state – `StackSet` with zipper workspaces, focus, swap, tag switching and moving windows between workspaces, checked by model-based property tests
 - ✅ Layouts – closed `Layout` enum with tile (master ratio in whole thousandths) and monocle, checked by property tests for exact coverage
-- ✅ X11 backend – `lutece-x11` translates X events into `Event` and applies `Scene` and `Effect` as X requests, with the caller owning the loop; key grabs, existing windows and several outputs come later
+- ✅ X11 backend – `lutece-x11` translates X events into `Event` and applies `Scene` and `Effect` as X requests, with the caller owning the loop; existing windows and several outputs come later
 - ✅ Engine and display-free tests – `Engine::handle` applies events, `Engine::scene` derives the scene, checked by event-replay tests and a property test over random event streams
-- ✅ Minimal example WM – `crates/lutece-x11/examples/minimal.rs` wires `Engine` to `X11Backend` in a short `main.rs`; it has no keys yet, so it is stopped from outside
+- ✅ Minimal example WM – `crates/lutece-x11/examples/minimal.rs` wires `Engine` to `X11Backend` in a short `main.rs`
+- ✅ Key bindings – `Keymap` and a closed `Action` enum in `input`; the engine owns the keymap, lists its keys with `Engine::grabs` and runs the action on `KeyPressed`; the X11 backend grabs them (also with CapsLock and NumLock held); the example quits, spawns, moves focus and switches workspaces
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
@@ -30,7 +31,6 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-- **Key bindings** – bindings and keymap in `input`, grabbed by the backend (`grabs.rs`).
 - **Adopt existing windows** – manage windows that are already mapped when the X11 backend starts.
 - **Manage rules** – float, workspace assignment and ignore rules in `rules`.
 - **Multi-output support** – several screens in the scene, with focus moving between them.
@@ -41,6 +41,8 @@ Author: deltaog-117
 
 ## 🟢 Low Priority (Nice‑to‑Have)
 
+- **Layout and master-ratio keys** – actions to switch layout and resize the master column.
+- **Keyboard remapping** – refresh the X11 keycode table on `MappingNotify` and re-grab.
 - **More layouts** – grid, centered master, and similar, as separate small modules.
 - **Floating windows** – move and resize in the scene model.
 - **Documentation site** – guide on writing a WM with the library.
@@ -58,4 +60,4 @@ Author: deltaog-117
 ## 🎯 Next Actions (Immediate)
 
 1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Add key bindings** – so the example can quit, spawn a program and move focus.
+2. **Adopt existing windows** – so the WM can take over a running session.

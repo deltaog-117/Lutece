@@ -38,3 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependencies for `lutece-x11`: `x11rb`, `thiserror` (and `proptest` for tests)
 - `minimal` example (`cargo run -p lutece-x11 --example minimal`): a window manager in one file that tiles every window on a single workspace; stop it with Ctrl-C or by closing the nested X server
 - `scripts/dev-x11 [display]`: builds the `minimal` example, starts Xephyr on a spare display (default `:2`, size from `LUTECE_SCREEN`), waits for it, runs the window manager in it and stops Xephyr on exit
+- Key bindings: `Keymap` (key combination to `Action`, one action per combination) and the `Action` enum (quit, close, spawn, focus and swap next/previous, view a tag, move to a tag)
+- `Engine::with_keymap` and `Engine::grabs`; a `KeyPressed` event now runs the bound action and returns `Quit`, `Close` and `Spawn` as effects
+- `Keysym::RETURN` and `Keysym::from_char`, and the error `DuplicateBinding`
+- `X11Backend::grab_keys` grabs key combinations on the root window, also with CapsLock and NumLock held, and key presses reach the core as `KeyPressed`; errors `UnmappedKeysym` and `KeyAlreadyGrabbed`
+- Property tests for the keymap, the keycode lookup and the modifier conversion, and replay tests for every key action
+
+### Changed
+- The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside

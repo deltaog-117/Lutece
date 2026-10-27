@@ -10,6 +10,7 @@
 //!
 //! let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, Layout::default());
 //! let mut backend = X11Backend::connect()?;
+//! backend.grab_keys(engine.grabs())?;
 //!
 //! 'run: loop {
 //!     for event in backend.next_events()? {

@@ -7,7 +7,9 @@
 mod handle;
 mod scene_builder;
 
+use crate::input::Keymap;
 use crate::layout::Layout;
+use crate::shared::contracts::event::KeyPress;
 use crate::shared::geometry::Rect;
 use crate::stack::stackset::StackSet;
 
@@ -36,6 +38,7 @@ use crate::stack::stackset::StackSet;
 pub struct Engine {
     stacks: StackSet,
     layout: Layout,
+    keymap: Keymap,
     /// The area windows are laid out in; `None` until the backend reports a screen.
     screen: Option<Rect>,
 }
@@ -47,8 +50,22 @@ impl Engine {
         Self {
             stacks,
             layout,
+            keymap: Keymap::new(),
             screen: None,
         }
+    }
+
+    /// Uses `keymap` for key presses. Without one, key presses do nothing.
+    #[must_use]
+    pub fn with_keymap(mut self, keymap: Keymap) -> Self {
+        self.keymap = keymap;
+        self
+    }
+
+    /// The key combinations the backend must grab so their presses reach
+    /// [`handle`](Engine::handle).
+    pub fn grabs(&self) -> impl Iterator<Item = KeyPress> + '_ {
+        self.keymap.presses()
     }
 
     /// The workspaces and the windows on them.

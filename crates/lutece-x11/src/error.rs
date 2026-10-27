@@ -1,6 +1,6 @@
 //! The single error type returned by every fallible operation in the backend.
 
-use lutece::WinId;
+use lutece::{KeyPress, Keysym, WinId};
 use std::io;
 use thiserror::Error;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
@@ -33,6 +33,12 @@ pub enum Error {
     /// A scene named a window this backend never reported, so it is not an X window id.
     #[error("window {0:?} was not reported by this backend")]
     ForeignWindow(WinId),
+    /// A key binding names a keysym that no key on the keyboard produces.
+    #[error("no key produces keysym {0:?}")]
+    UnmappedKeysym(Keysym),
+    /// Another client already holds a key combination the core wants to grab.
+    #[error("key combination {0:?} is already grabbed by another client")]
+    KeyAlreadyGrabbed(KeyPress),
     /// The core rejected a value built from what the X server reported.
     #[error(transparent)]
     Core(#[from] lutece::Error),

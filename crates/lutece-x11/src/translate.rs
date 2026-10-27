@@ -1,9 +1,10 @@
 //! X events in, lutece [`Event`]s out.
 
+use crate::grabs::{Keyboard, modifiers_of};
 use crate::windows::Windows;
-use lutece::{Event, WinId, WindowInfo};
+use lutece::{Event, KeyPress, WinId, WindowInfo};
 use x11rb::protocol::Event as XEvent;
-use x11rb::protocol::xproto::{NotifyDetail, NotifyMode, Window};
+use x11rb::protocol::xproto::{KeyPressEvent, NotifyDetail, NotifyMode, Window};
 
 pub(crate) fn win_id(window: Window) -> WinId {
     WinId::new(u64::from(window))
@@ -50,9 +51,19 @@ pub(crate) fn translate(
     }
 }
 
+/// Turns a grabbed key press into the event it means. Keys with no keysym produce
+/// nothing.
+pub(crate) fn key_press(keyboard: &Keyboard, press: &KeyPressEvent) -> Option<Event> {
+    Some(Event::KeyPressed(KeyPress {
+        keysym: keyboard.keysym_of(press.detail)?,
+        modifiers: modifiers_of(press.state),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lutece::{Keysym, Modifiers};
     use proptest::prelude::*;
     use x11rb::protocol::xproto::{
         DestroyNotifyEvent, EnterNotifyEvent, KeyButMask, MapRequestEvent, UnmapNotifyEvent,
@@ -105,6 +116,24 @@ mod tests {
         })
     }
 
+    fn key_event(keycode: u8, state: KeyButMask) -> KeyPressEvent {
+        KeyPressEvent {
+            response_type: 2,
+            detail: keycode,
+            sequence: 0,
+            time: 0,
+            root: 1,
+            event: 1,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state,
+            same_screen: true,
+        }
+    }
+
     fn run(windows: &mut Windows, event: &XEvent) -> Option<Event> {
         translate(windows, event, |_| WindowInfo::default())
     }
@@ -152,6 +181,21 @@ mod tests {
         assert_eq!(run(&mut windows, &grabbed), None);
         let stranger = enter(9, NotifyMode::NORMAL, NotifyDetail::ANCESTOR);
         assert_eq!(run(&mut windows, &stranger), None);
+    }
+
+    #[test]
+    fn a_grabbed_press_carries_its_plain_keysym_and_modifiers_but_not_lock_keys() {
+        // Keycodes 8 and 9 produce 'a' and 'q' (shifted: 'A' and 'Q').
+        let keyboard = Keyboard::new(8, 2, vec![0x61, 0x41, 0x71, 0x51]);
+        let state = KeyButMask::MOD4 | KeyButMask::SHIFT | KeyButMask::LOCK | KeyButMask::MOD2;
+        assert_eq!(
+            key_press(&keyboard, &key_event(9, state)),
+            Some(Event::KeyPressed(KeyPress {
+                keysym: Keysym(0x71),
+                modifiers: Modifiers::SUPER | Modifiers::SHIFT,
+            }))
+        );
+        assert_eq!(key_press(&keyboard, &key_event(30, state)), None);
     }
 
     proptest! {
