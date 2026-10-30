@@ -5,6 +5,9 @@ use crate::input::Action;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::event::Event;
 
+/// How far one key press moves the master column, in thousandths of the width.
+const MASTER_STEP: i16 = 50;
+
 impl Engine {
     /// Applies `event` and returns the effects the backend must carry out.
     ///
@@ -52,6 +55,9 @@ impl Engine {
             Action::FocusPrev => self.stacks.focus_prev(),
             Action::SwapNext => self.stacks.swap_next(),
             Action::SwapPrev => self.stacks.swap_prev(),
+            Action::NextLayout => self.stacks.next_layout(),
+            Action::GrowMaster => self.stacks.resize_master(MASTER_STEP),
+            Action::ShrinkMaster => self.stacks.resize_master(-MASTER_STEP),
             // A tag nobody has (a binding written for another set of workspaces) is
             // ignored, like any other request that no longer applies.
             Action::ViewTag(tag) => {

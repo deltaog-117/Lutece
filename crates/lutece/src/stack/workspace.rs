@@ -1,5 +1,6 @@
 //! One workspace: an ordered list of windows with exactly one of them focused.
 
+use crate::layout::{Layout, MasterRatio};
 use crate::shared::ids::{Tag, WinId};
 use std::collections::VecDeque;
 use std::iter;
@@ -131,16 +132,62 @@ impl Stack {
     }
 }
 
-/// A named workspace and the windows on it.
+/// A named workspace, the windows on it and how it arranges them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     tag: Tag,
     stack: Option<Stack>,
+    layout: Layout,
+    /// The ratio tile gets back when the layout cycles round to it again. Only read
+    /// while another layout is showing.
+    tile_ratio: MasterRatio,
 }
 
 impl Workspace {
-    pub(crate) fn empty(tag: Tag) -> Self {
-        Self { tag, stack: None }
+    pub(crate) fn empty(tag: Tag, layout: Layout) -> Self {
+        let tile_ratio = match layout {
+            Layout::Tile(ratio) => ratio,
+            Layout::Monocle => MasterRatio::default(),
+        };
+        Self {
+            tag,
+            stack: None,
+            layout,
+            tile_ratio,
+        }
+    }
+
+    /// How the workspace arranges its windows.
+    #[must_use]
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Switches to the next layout, wrapping around. Tile keeps the master ratio it had
+    /// when it was last showing.
+    pub(crate) fn next_layout(&mut self) {
+        self.layout = match self.layout {
+            Layout::Tile(ratio) => {
+                self.tile_ratio = ratio;
+                Layout::Monocle
+            }
+            Layout::Monocle => Layout::Tile(self.tile_ratio),
+        };
+    }
+
+    /// Moves the master ratio by `delta` thousandths. Layouts without a master column
+    /// ignore it.
+    pub(crate) fn resize_master(&mut self, delta: i16) {
+        if let Layout::Tile(ratio) = self.layout {
+            self.layout = Layout::Tile(ratio.step(delta));
+        }
+    }
+
+    pub(crate) fn set_layout(&mut self, layout: Layout) {
+        self.layout = layout;
+        if let Layout::Tile(ratio) = layout {
+            self.tile_ratio = ratio;
+        }
     }
 
     /// The workspace's name.
@@ -254,6 +301,33 @@ mod tests {
                 let at = pick % ids.len();
                 stack(&ids[..at], ids[at], &ids[at + 1..])
             })
+    }
+
+    fn workspace(layout: Layout) -> Workspace {
+        Workspace::empty(Tag::try_new("1").expect("tag has text"), layout)
+    }
+
+    fn ratio(permille: u16) -> MasterRatio {
+        MasterRatio::try_new(permille).expect("in range")
+    }
+
+    #[test]
+    fn cycling_the_layout_brings_tile_back_with_its_ratio() {
+        let mut ws = workspace(Layout::Tile(ratio(550)));
+        ws.resize_master(100);
+        ws.next_layout();
+        assert_eq!(ws.layout(), Layout::Monocle);
+        ws.next_layout();
+        assert_eq!(ws.layout(), Layout::Tile(ratio(650)));
+    }
+
+    #[test]
+    fn resizing_the_master_does_nothing_in_monocle() {
+        let mut ws = workspace(Layout::Monocle);
+        ws.resize_master(100);
+        assert_eq!(ws.layout(), Layout::Monocle);
+        ws.next_layout();
+        assert_eq!(ws.layout(), Layout::Tile(MasterRatio::default()));
     }
 
     #[test]

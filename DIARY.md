@@ -634,3 +634,43 @@ Asking after the redirect closes the race: a window that maps later sends a map 
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-10-30 | Initial entry | deltaog-117 |
+
+---
+
+### Layout and master-ratio keys: the layout lives on each workspace
+
+**Date:** 2026-10-30
+**Status:** Confirmed
+
+#### Context / Background
+
+The layout was one value on `Engine`, shared by every workspace, so there was nowhere for a key to change it per workspace. The roadmap asked for actions to switch the layout and resize the master column.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. One engine-wide layout, cycling actions change it | Smallest change; nothing in `stack` moves | All workspaces share one layout; going per-workspace later changes engine behaviour | S |
+| B. Layout stored on each `Workspace` | Each tag keeps its layout and ratio, as in dwm; state is covered by workspace tests | Touches `Workspace` and `StackSet` | M |
+| C. As A, with `SetLayout(Layout)` and `AdjustMaster(i16)` | A key can pick a layout directly | A binding can carry a stale ratio; still engine-wide | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** B.
+
+The library is the base for two window managers, and sharing one layout across workspaces is the wrong model for both. Doing it before `Action` has users avoids a behaviour change later.
+
+#### Implementation Notes
+
+- `Engine::new` still takes a layout; it becomes the starting layout of every workspace (`StackSet::with_layout`, crate-private), so existing callers compile unchanged.
+- Cycling goes Tile, Monocle, Tile. A workspace remembers the tile ratio while monocle shows, so a round trip does not reset the width.
+- `MasterRatio::step` clamps to 1..=999, keeping the type's guarantee, and a property test checks that any step stays in range and is exact when it can be.
+- Resizing is ignored in monocle, like other requests that no longer apply. The step (50 thousandths) is a constant in the engine, not part of the action.
+- Not done: `SetLayout` for picking a layout directly. It is not needed until a third layout exists.
+- Not tested against a real X server, for the same reason as the earlier key work: `xdotool` is not installed.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-30 | Initial entry | deltaog-117 |

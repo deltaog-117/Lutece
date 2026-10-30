@@ -2,6 +2,7 @@
 //! changes in response to events; it never touches a display.
 
 use super::workspace::Workspace;
+use crate::layout::Layout;
 use crate::shared::error::{Error, Result};
 use crate::shared::ids::{Tag, WinId};
 use std::collections::HashSet;
@@ -20,7 +21,8 @@ pub struct StackSet {
 }
 
 impl StackSet {
-    /// Builds the set with one empty workspace per tag. The first tag is current.
+    /// Builds the set with one empty workspace per tag. The first tag is current. Every
+    /// workspace starts with the default layout.
     ///
     /// # Errors
     ///
@@ -45,7 +47,7 @@ impl StackSet {
             if !seen.insert(tag.clone()) {
                 return Err(Error::DuplicateTag(tag));
             }
-            workspaces.push(Workspace::empty(tag));
+            workspaces.push(Workspace::empty(tag, Layout::default()));
         }
         let mut workspaces = workspaces.into_iter();
         let current = workspaces.next().ok_or(Error::NoWorkspaces)?;
@@ -54,6 +56,13 @@ impl StackSet {
             current,
             after: workspaces.collect(),
         })
+    }
+
+    /// Gives every workspace `layout`.
+    pub(crate) fn with_layout(mut self, layout: Layout) -> Self {
+        self.workspaces_mut()
+            .for_each(|workspace| workspace.set_layout(layout));
+        self
     }
 
     /// The workspace on screen.
@@ -162,6 +171,17 @@ impl StackSet {
     /// Swaps the focused window with the previous one; the focus follows it.
     pub fn swap_prev(&mut self) {
         self.current.swap_prev();
+    }
+
+    /// Switches the current workspace to its next layout, wrapping around.
+    pub fn next_layout(&mut self) {
+        self.current.next_layout();
+    }
+
+    /// Moves the current workspace's master ratio by `delta` thousandths, if its layout
+    /// has a master column.
+    pub fn resize_master(&mut self, delta: i16) {
+        self.current.resize_master(delta);
     }
 
     /// Makes the workspace with this tag current.

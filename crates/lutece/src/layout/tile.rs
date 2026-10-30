@@ -43,6 +43,27 @@ impl MasterRatio {
         self.0
     }
 
+    /// Moves the ratio by `delta` thousandths, stopping at 1 and 999 so neither column
+    /// can vanish.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lutece::layout::MasterRatio;
+    ///
+    /// let ratio = MasterRatio::try_new(550)?;
+    /// assert_eq!(ratio.step(50).permille(), 600);
+    /// assert_eq!(ratio.step(-9000).permille(), 1);
+    /// assert_eq!(ratio.step(9000).permille(), 999);
+    /// # Ok::<(), lutece::Error>(())
+    /// ```
+    #[must_use]
+    pub fn step(self, delta: i16) -> Self {
+        let moved = (i32::from(self.0) + i32::from(delta)).clamp(1, 999);
+        // The clamp keeps it in `1..=999`, so the conversion cannot fail.
+        Self(u16::try_from(moved).unwrap_or(self.0))
+    }
+
     /// The master width for an area `width` wide; `width` must be at least 2.
     /// Clamped so the master and the rest each keep at least one pixel.
     fn master_width(self, width: u32) -> u32 {
@@ -145,6 +166,19 @@ mod tests {
         #[test]
         fn ratio_accepts_exactly_1_to_999(permille in any::<u16>()) {
             prop_assert_eq!(MasterRatio::try_new(permille).is_ok(), (1..=999).contains(&permille));
+        }
+
+        #[test]
+        fn stepping_stays_in_range_and_moves_by_delta_when_it_can(
+            permille in 1_u16..1000, delta in any::<i16>(),
+        ) {
+            let ratio = MasterRatio::try_new(permille).expect("in range");
+            let stepped = ratio.step(delta).permille();
+            prop_assert!((1..=999).contains(&stepped));
+            let exact = i32::from(permille) + i32::from(delta);
+            if (1..=999).contains(&exact) {
+                prop_assert_eq!(i32::from(stepped), exact);
+            }
         }
 
         #[test]

@@ -20,6 +20,7 @@ Author: deltaog-117
 - ✅ Minimal example WM – `crates/lutece-x11/examples/minimal.rs` wires `Engine` to `X11Backend` in a short `main.rs`
 - ✅ Key bindings – `Keymap` and a closed `Action` enum in `input`; the engine owns the keymap, lists its keys with `Engine::grabs` and runs the action on `KeyPressed`; the X11 backend grabs them (also with CapsLock and NumLock held); the example quits, spawns, moves focus and switches workspaces
 - ✅ Adopt existing windows – `X11Backend::connect` queries the root's children after taking over and reports each showing, non-override-redirect window as `WindowOpened`, so the WM can replace a running one without a restart
+- ✅ Layout and master-ratio keys – each workspace keeps its own `Layout`; `NextLayout`, `GrowMaster` and `ShrinkMaster` actions cycle it and move the master column in 5% steps; the example binds Super+space, h and l
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
@@ -41,7 +42,6 @@ Author: deltaog-117
 
 ## 🟢 Low Priority (Nice‑to‑Have)
 
-- **Layout and master-ratio keys** – actions to switch layout and resize the master column.
 - **Keyboard remapping** – refresh the X11 keycode table on `MappingNotify` and re-grab.
 - **More layouts** – grid, centered master, and similar, as separate small modules.
 - **Floating windows** – move and resize in the scene model.

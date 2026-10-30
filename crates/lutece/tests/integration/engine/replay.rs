@@ -316,6 +316,9 @@ fn keymap() -> Keymap {
         (key('9', Modifiers::SUPER), Action::ViewTag(tag("9"))),
         (key('l', Modifiers::SUPER), Action::SwapNext),
         (key('h', Modifiers::SUPER), Action::SwapPrev),
+        (key('n', Modifiers::SUPER), Action::NextLayout),
+        (key('g', Modifiers::SUPER), Action::GrowMaster),
+        (key('s', Modifiers::SUPER), Action::ShrinkMaster),
     ];
     for (press, action) in binds {
         keymap.bind(press, action).expect("distinct bindings");
@@ -330,7 +333,7 @@ fn bound_engine() -> Engine {
 #[test]
 fn the_engine_lists_the_keys_to_grab() {
     let engine = bound_engine();
-    assert_eq!(engine.grabs().count(), 10);
+    assert_eq!(engine.grabs().count(), 13);
     assert_eq!(
         engine.grabs().next(),
         Some(key('q', Modifiers::SUPER | Modifiers::SHIFT))
@@ -401,4 +404,67 @@ fn a_press_that_is_not_bound_changes_nothing() {
     assert!(engine.handle(pressed('j', Modifiers::NONE)).is_empty());
     assert!(engine.handle(pressed('z', Modifiers::SUPER)).is_empty());
     assert_eq!(engine, before);
+}
+
+fn master_width(engine: &Engine) -> u32 {
+    scene(engine).placements()[0].rect.width()
+}
+
+#[test]
+fn master_keys_resize_the_column_and_stop_at_the_edges() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+    assert_eq!(master_width(&engine), 550);
+
+    engine.handle(pressed('g', Modifiers::SUPER));
+    assert_eq!(master_width(&engine), 600);
+    engine.handle(pressed('s', Modifiers::SUPER));
+    engine.handle(pressed('s', Modifiers::SUPER));
+    assert_eq!(master_width(&engine), 500);
+
+    for _ in 0..40 {
+        engine.handle(pressed('g', Modifiers::SUPER));
+    }
+    assert_eq!(master_width(&engine), 999);
+}
+
+#[test]
+fn the_layout_key_cycles_and_tile_keeps_its_ratio() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+    engine.handle(pressed('g', Modifiers::SUPER));
+
+    engine.handle(pressed('n', Modifiers::SUPER));
+    assert_eq!(engine.stacks().current().layout(), Layout::Monocle);
+    assert!(
+        scene(&engine)
+            .placements()
+            .iter()
+            .all(|p| p.rect.width() == 1000)
+    );
+
+    // Resizing is ignored while monocle shows.
+    let before = engine.clone();
+    engine.handle(pressed('g', Modifiers::SUPER));
+    assert_eq!(engine, before);
+
+    engine.handle(pressed('n', Modifiers::SUPER));
+    assert_eq!(master_width(&engine), 600);
+}
+
+#[test]
+fn each_workspace_keeps_its_own_layout() {
+    let mut engine = bound_engine();
+    let shift = Modifiers::SUPER | Modifiers::SHIFT;
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    engine.handle(pressed('n', Modifiers::SUPER));
+
+    engine.handle(pressed('2', shift));
+    engine.handle(pressed('2', Modifiers::SUPER));
+
+    let layouts: Vec<_> = engine.stacks().workspaces().map(|ws| ws.layout()).collect();
+    assert_eq!(
+        layouts,
+        [Layout::Monocle, Layout::default(), Layout::default()]
+    );
 }

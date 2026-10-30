@@ -21,7 +21,9 @@ impl Engine {
         };
         let workspace = self.stacks.current();
         let windows: Vec<WinId> = workspace.windows().collect();
-        let placements = self.layout.arrange(area, &windows, workspace.focus())?;
+        let placements = workspace
+            .layout()
+            .arrange(area, &windows, workspace.focus())?;
         Scene::try_new(placements, workspace.focus())
     }
 }

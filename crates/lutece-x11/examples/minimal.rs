@@ -9,6 +9,8 @@
 //! | Super+j / Super+k | focus the next / previous window |
 //! | Super+Shift+j / Super+Shift+k | swap the focused window with the next / previous |
 //! | Super+1..9 | show that workspace |
+//! | Super+space | switch the workspace to its next layout |
+//! | Super+h / Super+l | narrow / widen the master column |
 //! | Super+Shift+1..9 | send the focused window to that workspace |
 //! | Super+Shift+c | close the focused window |
 //! | Super+Shift+q | quit |
@@ -43,6 +45,9 @@ fn keymap(tags: &[Tag]) -> Result<Keymap> {
     keymap.bind(key('k', Modifiers::SUPER)?, Action::FocusPrev)?;
     keymap.bind(key('j', shifted)?, Action::SwapNext)?;
     keymap.bind(key('k', shifted)?, Action::SwapPrev)?;
+    keymap.bind(key(' ', Modifiers::SUPER)?, Action::NextLayout)?;
+    keymap.bind(key('h', Modifiers::SUPER)?, Action::ShrinkMaster)?;
+    keymap.bind(key('l', Modifiers::SUPER)?, Action::GrowMaster)?;
     keymap.bind(key('c', shifted)?, Action::Close)?;
     keymap.bind(key('q', shifted)?, Action::Quit)?;
     for (digit, tag) in ('1'..='9').zip(tags) {

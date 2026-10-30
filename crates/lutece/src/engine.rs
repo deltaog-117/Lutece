@@ -37,19 +37,18 @@ use crate::stack::stackset::StackSet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Engine {
     stacks: StackSet,
-    layout: Layout,
     keymap: Keymap,
     /// The area windows are laid out in; `None` until the backend reports a screen.
     screen: Option<Rect>,
 }
 
 impl Engine {
-    /// Builds an engine with no screen yet. Every workspace uses `layout`.
+    /// Builds an engine with no screen yet. Every workspace starts with `layout` and can
+    /// change it on its own afterwards.
     #[must_use]
     pub fn new(stacks: StackSet, layout: Layout) -> Self {
         Self {
-            stacks,
-            layout,
+            stacks: stacks.with_layout(layout),
             keymap: Keymap::new(),
             screen: None,
         }

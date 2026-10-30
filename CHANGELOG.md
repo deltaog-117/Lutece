@@ -46,5 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `X11Backend::connect` adopts windows already on screen: each showing, non-override-redirect window is reported as `WindowOpened` after the screen, bottom of the stack first
 - Tests that only showing client windows are adopted, once, and that an adopted window is hidden with a real unmap
 
+- Layout keys: the `Action` variants `NextLayout`, `GrowMaster` and `ShrinkMaster`; growing and shrinking move the master column by 5% and are ignored by layouts without one
+- `Workspace::layout`, `StackSet::next_layout` and `StackSet::resize_master`, and `MasterRatio::step`, which moves a ratio and stops at the 1 to 999 limits
+- Tests for `MasterRatio::step`, for tile getting its ratio back after a trip through monocle, and for replaying the layout keys through the engine
+- The `minimal` example binds Super+space (next layout) and Super+h / Super+l (narrow / widen the master column)
+
 ### Changed
+- Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside

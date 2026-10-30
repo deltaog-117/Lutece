@@ -25,6 +25,12 @@ pub enum Action {
     SwapNext,
     /// Swap the focused window with the previous one; the focus follows it.
     SwapPrev,
+    /// Switch the current workspace to its next layout, wrapping around.
+    NextLayout,
+    /// Widen the current workspace's master column. Does nothing in layouts without one.
+    GrowMaster,
+    /// Narrow the current workspace's master column. Does nothing in layouts without one.
+    ShrinkMaster,
     /// Show the workspace with this tag. Does nothing if there is none.
     ViewTag(Tag),
     /// Send the focused window to the workspace with this tag. Does nothing if there is
