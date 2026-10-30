@@ -15,6 +15,9 @@ pub enum Effect {
     Close(WinId),
     /// Start a program.
     Spawn(SpawnCommand),
+    /// Stop managing a window and leave it to its client, which shows it where it asks.
+    /// The core never mentions the window again.
+    Release(WinId),
     /// Stop the window manager.
     Quit,
 }

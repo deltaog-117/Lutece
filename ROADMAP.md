@@ -21,6 +21,7 @@ Author: deltaog-117
 - ✅ Key bindings – `Keymap` and a closed `Action` enum in `input`; the engine owns the keymap, lists its keys with `Engine::grabs` and runs the action on `KeyPressed`; the X11 backend grabs them (also with CapsLock and NumLock held); the example quits, spawns, moves focus and switches workspaces
 - ✅ Adopt existing windows – `X11Backend::connect` queries the root's children after taking over and reports each showing, non-override-redirect window as `WindowOpened`, so the WM can replace a running one without a restart
 - ✅ Layout and master-ratio keys – each workspace keeps its own `Layout`; `NextLayout`, `GrowMaster` and `ShrinkMaster` actions cycle it and move the master column in 5% steps; the example binds Super+space, h and l
+- ✅ Manage rules – `Rules` of `ManageRule`s match a new window by class, title or dialog status; the first match either ignores the window (`Effect::Release` hands it back to its client) or opens it on another workspace; `Engine::with_rules` refuses an unknown workspace; float waits for floating windows
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
@@ -33,7 +34,6 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-- **Manage rules** – float, workspace assignment and ignore rules in `rules`.
 - **Multi-output support** – several screens in the scene, with focus moving between them.
 - **Scripted X11 integration tests** – drive the nested X server with `xdotool` and assert window geometry.
 - **Headless CI check** – run the core tests and X11 integration tests with `Xvfb`.
@@ -44,7 +44,7 @@ Author: deltaog-117
 
 - **Keyboard remapping** – refresh the X11 keycode table on `MappingNotify` and re-grab.
 - **More layouts** – grid, centered master, and similar, as separate small modules.
-- **Floating windows** – move and resize in the scene model.
+- **Floating windows** – move and resize in the scene model, with a `Float` outcome for manage rules.
 - **Documentation site** – guide on writing a WM with the library.
 
 ---
@@ -60,4 +60,4 @@ Author: deltaog-117
 ## 🎯 Next Actions (Immediate)
 
 1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Manage rules** – float, workspace assignment and ignore rules in `rules`.
+2. **Floating windows** – scene model and a `Float` manage-rule outcome.

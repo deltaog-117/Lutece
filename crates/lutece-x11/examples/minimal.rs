@@ -15,12 +15,16 @@
 //! | Super+Shift+c | close the focused window |
 //! | Super+Shift+q | quit |
 //!
+//! Two manage rules show the rule API: `Xmessage` windows are left to their client, and
+//! `Firefox` opens on workspace 9 without switching to it.
+//!
 //! ```text
 //! DISPLAY=:2 cargo run -p lutece-x11 --example minimal
 //! ```
 
 use lutece::{
-    Action, Engine, KeyPress, Keymap, Keysym, Layout, Modifiers, SpawnCommand, StackSet, Tag,
+    Action, Engine, KeyPress, Keymap, Keysym, Layout, ManageRule, Match, Modifiers, Outcome, Rules,
+    SpawnCommand, StackSet, Tag,
 };
 use lutece_x11::{Flow, X11Backend};
 
@@ -57,12 +61,27 @@ fn keymap(tags: &[Tag]) -> Result<Keymap> {
     Ok(keymap)
 }
 
+fn rules(tags: &[Tag]) -> Result<Rules> {
+    let last = tags.last().ok_or("no workspaces")?.clone();
+    let mut rules = Rules::new();
+    rules.push(ManageRule::new(
+        Match::Class("Xmessage".into()),
+        Outcome::Ignore,
+    ));
+    rules.push(ManageRule::new(
+        Match::Class("Firefox".into()),
+        Outcome::SendTo(last),
+    ));
+    Ok(rules)
+}
+
 fn main() -> Result<()> {
     let tags = ('1'..='9')
         .map(|digit| Tag::try_new(digit.to_string()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut engine =
-        Engine::new(StackSet::new(tags.clone())?, Layout::default()).with_keymap(keymap(&tags)?);
+    let mut engine = Engine::new(StackSet::new(tags.clone())?, Layout::default())
+        .with_keymap(keymap(&tags)?)
+        .with_rules(rules(&tags)?)?;
     let mut backend = X11Backend::connect()?;
     backend.grab_keys(engine.grabs())?;
 

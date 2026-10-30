@@ -2,8 +2,10 @@
 
 use super::Engine;
 use crate::input::Action;
+use crate::rules::Outcome;
 use crate::shared::contracts::effect::Effect;
-use crate::shared::contracts::event::Event;
+use crate::shared::contracts::event::{Event, WindowInfo};
+use crate::shared::ids::WinId;
 
 /// How far one key press moves the master column, in thousandths of the width.
 const MASTER_STEP: i16 = 50;
@@ -13,6 +15,9 @@ impl Engine {
     ///
     /// Events that no longer apply are ignored, not reported: a backend sees close and
     /// focus events for windows it has already lost, and a duplicate open is harmless.
+    /// A window that opens is placed by the engine's rules: on the current workspace by
+    /// default, on another one if a rule sends it there, or released to its client with
+    /// [`Effect::Release`] if a rule ignores it.
     /// A key press runs the action bound to it in the engine's keymap, and a press with
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
     /// focused window and spawning a program.
@@ -22,10 +27,7 @@ impl Engine {
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         let mut effects = Vec::new();
         match event {
-            Event::WindowOpened { id, .. } => {
-                // A window that is already managed stays where it is.
-                let _ = self.stacks.insert(id);
-            }
+            Event::WindowOpened { id, info } => self.open(id, &info, &mut effects),
             Event::WindowClosed(id) => {
                 // Already gone: nothing left to remove.
                 let _ = self.stacks.remove(id);
@@ -44,6 +46,24 @@ impl Engine {
             }
         }
         effects
+    }
+
+    fn open(&mut self, id: WinId, info: &WindowInfo, effects: &mut Vec<Effect>) {
+        // A window that is already managed stays where it is, whatever the rules say.
+        match self.rules.outcome_for(info) {
+            None => {
+                let _ = self.stacks.insert(id);
+            }
+            // `with_rules` checked that every tag exists.
+            Some(Outcome::SendTo(tag)) => {
+                let _ = self.stacks.insert_on(id, tag);
+            }
+            Some(Outcome::Ignore) => {
+                if !self.stacks.contains(id) {
+                    effects.push(Effect::Release(id));
+                }
+            }
+        }
     }
 
     fn run(&mut self, action: Action, effects: &mut Vec<Effect>) {

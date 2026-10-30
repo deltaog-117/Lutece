@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Workspace::layout`, `StackSet::next_layout` and `StackSet::resize_master`, and `MasterRatio::step`, which moves a ratio and stops at the 1 to 999 limits
 - Tests for `MasterRatio::step`, for tile getting its ratio back after a trip through monocle, and for replaying the layout keys through the engine
 - The `minimal` example binds Super+space (next layout) and Super+h / Super+l (narrow / widen the master column)
+- Manage rules in `lutece::rules`: `Rules` is an ordered list of `ManageRule`s, each a `Match` (class, title or dialog) and an `Outcome` (`Ignore` or `SendTo(Tag)`); the first match decides
+- `Engine::with_rules`, which refuses rules that send windows to a workspace the engine lacks; `StackSet::insert_on` adds a window to a given workspace without switching to it
+- `Effect::Release`: the core stops managing a window and leaves it to its client; the X11 backend maps it, forgets it and answers its configure requests as it asks
+- Tests for rule matching and order, for send and ignore rules replayed through the engine, and for a released window never being reported again
+- The `minimal` example ignores `Xmessage` windows and opens `Firefox` on workspace 9
 
 ### Changed
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with

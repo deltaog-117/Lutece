@@ -124,6 +124,25 @@ impl StackSet {
         Ok(())
     }
 
+    /// Adds a window to the workspace with this tag and focuses it there. The current
+    /// workspace stays on screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DuplicateWindow`] if the window is already managed, or
+    /// [`Error::UnknownTag`] if no workspace has the tag.
+    pub fn insert_on(&mut self, id: WinId, tag: &Tag) -> Result<()> {
+        if self.contains(id) {
+            return Err(Error::DuplicateWindow(id));
+        }
+        let target = self.index_of_tag(tag)?;
+        // `target` came from `index_of_tag`, so the workspace exists.
+        if let Some(workspace) = self.workspaces_mut().nth(target) {
+            workspace.insert(id);
+        }
+        Ok(())
+    }
+
     /// Removes a window from whichever workspace holds it.
     ///
     /// # Errors
@@ -295,6 +314,32 @@ mod tests {
             .windows()
             .map(WinId::get)
             .collect()
+    }
+
+    #[test]
+    fn insert_on_fills_another_workspace_and_leaves_the_view_alone() {
+        let mut set = set();
+        set.insert(w(1)).expect("new window");
+        set.insert_on(w(2), &tag("3")).expect("new window");
+
+        assert_eq!(windows_of(&set, "3"), [2]);
+        assert_eq!(set.current().tag(), &tag("1"));
+        assert_eq!(set.focused(), Some(w(1)));
+    }
+
+    #[test]
+    fn insert_on_refuses_a_managed_window_and_an_unknown_tag() {
+        let mut set = set();
+        set.insert(w(1)).expect("new window");
+        assert_eq!(
+            set.insert_on(w(1), &tag("2")),
+            Err(Error::DuplicateWindow(w(1)))
+        );
+        assert_eq!(
+            set.insert_on(w(2), &tag("9")),
+            Err(Error::UnknownTag(tag("9")))
+        );
+        assert!(!set.contains(w(2)));
     }
 
     #[test]

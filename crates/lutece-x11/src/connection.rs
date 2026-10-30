@@ -166,8 +166,10 @@ impl X11Backend {
     ///
     /// Returns [`Error::Spawn`] if a program cannot be started, or an error if the
     /// connection to the X server breaks.
+    ///
+    /// [`Effect::Release`] shows the window and stops reporting it, so its client sizes it.
     pub fn apply_effects(&mut self, effects: &[Effect]) -> Result<Flow> {
-        run_effects(&self.conn, &self.atoms, effects)
+        run_effects(&self.conn, &self.atoms, &mut self.windows, effects)
     }
 
     fn translate_into_queue(&mut self, event: &XEvent) -> Result<()> {

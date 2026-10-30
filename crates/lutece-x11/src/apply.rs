@@ -137,12 +137,14 @@ pub(crate) fn execute(conn: &impl Connection, root: Window, ops: &[Op]) -> Resul
 pub(crate) fn run_effects(
     conn: &impl Connection,
     atoms: &Atoms,
+    windows: &mut Windows,
     effects: &[Effect],
 ) -> Result<Flow> {
     for effect in effects {
         match effect {
             Effect::Close(id) => close(conn, atoms, window_of(*id)?)?,
             Effect::Spawn(command) => spawn(command)?,
+            Effect::Release(id) => release(conn, windows, window_of(*id)?)?,
             Effect::Quit => return Ok(Flow::Quit),
             // `Effect` may grow; an effect this backend does not know is not carried out.
             _ => {}
@@ -150,6 +152,14 @@ pub(crate) fn run_effects(
     }
     conn.flush()?;
     Ok(Flow::Continue)
+}
+
+/// Hands `window` back to its client. It was held back at its map request, so it is
+/// shown now, and everything else we knew about it is dropped.
+fn release(conn: &impl Connection, windows: &mut Windows, window: Window) -> Result<()> {
+    windows.forget(window);
+    conn.map_window(window)?;
+    Ok(())
 }
 
 /// Asks the client to close itself, and kills its connection only if it cannot be asked.

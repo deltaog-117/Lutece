@@ -1,8 +1,9 @@
 //! Recorded event streams replayed through the engine, with the resulting scene checked.
 
 use lutece::{
-    Action, Change, Effect, Engine, Error, Event, KeyPress, Keymap, Keysym, Layout, Modifiers,
-    Output, OutputId, Rect, Scene, SpawnCommand, StackSet, Tag, WinId, WindowInfo, diff,
+    Action, Change, Effect, Engine, Error, Event, KeyPress, Keymap, Keysym, Layout, ManageRule,
+    Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene, SpawnCommand, StackSet, Tag,
+    WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -467,4 +468,71 @@ fn each_workspace_keeps_its_own_layout() {
         layouts,
         [Layout::Monocle, Layout::default(), Layout::default()]
     );
+}
+
+fn open_class(raw: u64, class: &str) -> Event {
+    Event::WindowOpened {
+        id: w(raw),
+        info: WindowInfo {
+            class: class.into(),
+            ..WindowInfo::default()
+        },
+    }
+}
+
+fn ruled_engine() -> Engine {
+    let mut rules = Rules::new();
+    rules.push(ManageRule::new(
+        Match::Class("Xmessage".into()),
+        Outcome::Ignore,
+    ));
+    rules.push(ManageRule::new(
+        Match::Class("Firefox".into()),
+        Outcome::SendTo(tag("3")),
+    ));
+    engine().with_rules(rules).expect("tag 3 exists")
+}
+
+#[test]
+fn a_send_rule_opens_the_window_on_its_workspace_without_switching() {
+    let mut engine = ruled_engine();
+    replay(
+        &mut engine,
+        [screen(1000, 600), open(1), open_class(2, "Firefox")],
+    );
+
+    assert_eq!(ids(&scene(&engine)), [1]);
+    assert_eq!(engine.stacks().tag_of(w(2)), Some(&tag("3")));
+
+    engine.handle(Event::FocusRequested(w(2)));
+    assert_eq!(ids(&scene(&engine)), [2]);
+}
+
+#[test]
+fn an_ignored_window_is_released_and_never_managed() {
+    let mut engine = ruled_engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    let before = engine.clone();
+
+    let effects = engine.handle(open_class(2, "Xmessage"));
+
+    assert_eq!(effects, [Effect::Release(w(2))]);
+    assert_eq!(engine, before);
+    assert!(engine.handle(Event::FocusRequested(w(2))).is_empty());
+    assert_eq!(engine, before);
+}
+
+#[test]
+fn a_window_no_rule_matches_opens_on_the_current_workspace() {
+    let mut engine = ruled_engine();
+    let effects = engine.handle(open_class(1, "Other"));
+    assert!(effects.is_empty());
+    assert_eq!(engine.stacks().tag_of(w(1)), Some(&tag("1")));
+}
+
+#[test]
+fn rules_that_name_a_missing_workspace_are_refused() {
+    let mut rules = Rules::new();
+    rules.push(ManageRule::new(Match::Dialog, Outcome::SendTo(tag("9"))));
+    assert_eq!(engine().with_rules(rules), Err(Error::UnknownTag(tag("9"))));
 }

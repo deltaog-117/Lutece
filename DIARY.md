@@ -23,6 +23,7 @@
 | 2026-10-27 | Nested dev environment | POSIX shell script around Xephyr, fixed spare display | ✅ Confirmed |
 | 2026-10-27 | Key bindings | Engine-owned keymap with a closed `Action` enum | ✅ Confirmed |
 | 2026-10-30 | Adopting existing windows | Scan the root's children at connect, report them as `WindowOpened` | ✅ Confirmed |
+| 2026-10-30 | Manage rules | Ignore and workspace rules as data; float waits for floating windows | ✅ Confirmed |
 
 ---
 
@@ -668,6 +669,44 @@ The library is the base for two window managers, and sharing one layout across w
 - Resizing is ignored in monocle, like other requests that no longer apply. The step (50 thousandths) is a constant in the engine, not part of the action.
 - Not done: `SetLayout` for picking a layout directly. It is not needed until a third layout exists.
 - Not tested against a real X server, for the same reason as the earlier key work: `xdotool` is not installed.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-30 | Initial entry | deltaog-117 |
+
+---
+
+### Manage rules: ignore and workspace rules, float later
+
+**Date:** 2026-10-30
+**Status:** Confirmed
+
+#### Context / Background
+
+Every new window opened on the current workspace and was tiled. The roadmap asked for rules that skip a window, send it to a workspace or float it. Float needs a floating layer in the scene and a source of geometry (`WindowInfo` carries none), which is its own roadmap item.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Ignore and workspace rules only | Small, fully testable, no placeholder model | No float rule yet | S |
+| B. Rules plus a minimal floating layer | Float works immediately | Touches scene, stack and both layers of X11; pre-empts the floating item | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+Every rule it offers does something real, and matching is property-testable. `Outcome` is `non_exhaustive`, so `Float` is added with the floating item, where the geometry question is solved once.
+
+#### Implementation Notes
+
+- Rules are data: a `Match` with one criterion (exact class, exact title, or dialog) and an `Outcome`. Two conditions mean two ordered rules, so a rule can never test nothing. First match wins.
+- `Engine::with_rules` returns an error for a `SendTo` tag the engine lacks, so `handle` never meets an unknown tag.
+- A window sent to another workspace is focused there; the view and its focus do not change.
+- Finding while implementing: the X11 backend holds a window back at its map request and maps it only through the scene, so an ignored window would have stayed invisible. `Effect::Release` fixes this: the backend forgets the window and maps it. Its later configure requests are granted because it is no longer managed.
+- Not done: matching by substring or several fields at once; the X11 `Release` is not tested against a real server (no `xdotool`), only the translation side is.
 
 #### Review / Update Log
 

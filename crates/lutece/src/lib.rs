@@ -7,12 +7,14 @@
 pub mod engine;
 pub mod input;
 pub mod layout;
+pub mod rules;
 pub mod shared;
 pub mod stack;
 
 pub use engine::Engine;
 pub use input::{Action, Keymap};
 pub use layout::{Layout, MasterRatio};
+pub use rules::{ManageRule, Match, Outcome, Rules};
 pub use shared::contracts::effect::{Effect, SpawnCommand};
 pub use shared::contracts::event::{Event, KeyPress, Keysym, Modifiers, Output, WindowInfo};
 pub use shared::contracts::scene::{Placement, Scene};

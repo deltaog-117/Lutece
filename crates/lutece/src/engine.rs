@@ -9,7 +9,9 @@ mod scene_builder;
 
 use crate::input::Keymap;
 use crate::layout::Layout;
+use crate::rules::Rules;
 use crate::shared::contracts::event::KeyPress;
+use crate::shared::error::{Error, Result};
 use crate::shared::geometry::Rect;
 use crate::stack::stackset::StackSet;
 
@@ -38,6 +40,7 @@ use crate::stack::stackset::StackSet;
 pub struct Engine {
     stacks: StackSet,
     keymap: Keymap,
+    rules: Rules,
     /// The area windows are laid out in; `None` until the backend reports a screen.
     screen: Option<Rect>,
 }
@@ -50,6 +53,7 @@ impl Engine {
         Self {
             stacks: stacks.with_layout(layout),
             keymap: Keymap::new(),
+            rules: Rules::new(),
             screen: None,
         }
     }
@@ -59,6 +63,24 @@ impl Engine {
     pub fn with_keymap(mut self, keymap: Keymap) -> Self {
         self.keymap = keymap;
         self
+    }
+
+    /// Uses `rules` to decide how newly opened windows are managed. Without any, every
+    /// window opens on the current workspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownTag`] if a rule sends windows to
+    /// a workspace this engine does not have.
+    pub fn with_rules(mut self, rules: Rules) -> Result<Self> {
+        if let Some(tag) = rules
+            .tags()
+            .find(|tag| !self.stacks.tags().any(|t| t == *tag))
+        {
+            return Err(Error::UnknownTag(tag.clone()));
+        }
+        self.rules = rules;
+        Ok(self)
     }
 
     /// The key combinations the backend must grab so their presses reach

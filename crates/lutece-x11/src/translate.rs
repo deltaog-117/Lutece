@@ -190,6 +190,16 @@ mod tests {
     }
 
     #[test]
+    fn a_released_window_is_never_reported_again() {
+        let mut windows = Windows::default();
+        run(&mut windows, &map_request(5));
+        windows.forget(5);
+
+        assert_eq!(run(&mut windows, &unmap(5)), None);
+        assert_eq!(run(&mut windows, &destroy(5)), None);
+    }
+
+    #[test]
     fn only_showing_client_windows_are_adopted_at_startup() {
         let mut windows = Windows::default();
         let adopt = |windows: &mut Windows, window, state, redirect| {
