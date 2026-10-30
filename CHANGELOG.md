@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Keysym::RETURN` and `Keysym::from_char`, and the error `DuplicateBinding`
 - `X11Backend::grab_keys` grabs key combinations on the root window, also with CapsLock and NumLock held, and key presses reach the core as `KeyPressed`; errors `UnmappedKeysym` and `KeyAlreadyGrabbed`
 - Property tests for the keymap, the keycode lookup and the modifier conversion, and replay tests for every key action
+- `X11Backend::connect` adopts windows already on screen: each showing, non-override-redirect window is reported as `WindowOpened` after the screen, bottom of the stack first
+- Tests that only showing client windows are adopted, once, and that an adopted window is hidden with a real unmap
 
 ### Changed
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside

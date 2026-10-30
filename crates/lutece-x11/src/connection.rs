@@ -3,7 +3,7 @@
 use crate::apply::{Flow, execute, plan, run_effects};
 use crate::error::{Error, Result};
 use crate::grabs::{Keyboard, grab_keys};
-use crate::translate::{key_press, translate};
+use crate::translate::{existing, key_press, translate};
 use crate::windows::Windows;
 use lutece::{Effect, Event, KeyPress, Output, OutputId, Rect, Scene, WindowInfo, diff};
 use std::mem;
@@ -51,7 +51,9 @@ pub struct X11Backend {
 impl X11Backend {
     /// Connects to the display named by `DISPLAY` and becomes its window manager.
     ///
-    /// The first call to [`next_events`](Self::next_events) reports the screen.
+    /// Windows already on screen are taken over. The first call to
+    /// [`next_events`](Self::next_events) reports the screen, then those windows, bottom
+    /// of the stack first.
     ///
     /// # Errors
     ///
@@ -79,18 +81,23 @@ impl X11Backend {
             other => other?,
         }
 
-        let output = Output {
+        let mut windows = Windows::default();
+        let mut queued = vec![Event::OutputsChanged(vec![Output {
             id: OutputId::new(0),
             rect: area,
-        };
+        }])];
+        // Asked after the redirect is in place: a window that maps from now on sends a
+        // map request, and one that mapped earlier is in this list, so none is missed.
+        queued.extend(existing_windows(&conn, &atoms, root, &mut windows)?);
+
         Ok(Self {
             conn,
             root,
             atoms,
             keyboard,
-            windows: Windows::default(),
+            windows,
             shown: Scene::empty(),
-            queued: vec![Event::OutputsChanged(vec![output])],
+            queued,
         })
     }
 
@@ -201,6 +208,37 @@ impl AsFd for X11Backend {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.conn.stream().as_fd()
     }
+}
+
+/// Opens the windows that were already showing, bottom of the stack first.
+fn existing_windows(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    root: Window,
+    windows: &mut Windows,
+) -> Result<Vec<Event>> {
+    let children = conn.query_tree(root)?.reply()?.children;
+    // Ask about all of them before reading any answer, to save a round trip each.
+    let cookies = children
+        .iter()
+        .map(|child| conn.get_window_attributes(*child))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut events = Vec::new();
+    for (child, cookie) in children.into_iter().zip(cookies) {
+        // A window destroyed since the tree was read has no attributes left to adopt.
+        let Ok(attributes) = cookie.reply() else {
+            continue;
+        };
+        events.extend(existing(
+            windows,
+            child,
+            attributes.map_state,
+            attributes.override_redirect,
+            |window| adopt(conn, atoms, window),
+        ));
+    }
+    Ok(events)
 }
 
 /// Subscribes to a new window's pointer events and describes it.

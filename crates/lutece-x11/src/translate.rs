@@ -4,7 +4,7 @@ use crate::grabs::{Keyboard, modifiers_of};
 use crate::windows::Windows;
 use lutece::{Event, KeyPress, WinId, WindowInfo};
 use x11rb::protocol::Event as XEvent;
-use x11rb::protocol::xproto::{KeyPressEvent, NotifyDetail, NotifyMode, Window};
+use x11rb::protocol::xproto::{KeyPressEvent, MapState, NotifyDetail, NotifyMode, Window};
 
 pub(crate) fn win_id(window: Window) -> WinId {
     WinId::new(u64::from(window))
@@ -49,6 +49,30 @@ pub(crate) fn translate(
         }
         _ => None,
     }
+}
+
+/// Turns a window that was already on screen when the backend started into the event
+/// that opens it, if it is a client window we should manage.
+///
+/// Windows that are not showing (they send a map request when they want to be) and
+/// override-redirect ones (menus and tooltips that opt out of management) produce
+/// nothing. A window that is adopted is recorded as on screen, so hiding it later sends
+/// the unmap it needs.
+pub(crate) fn existing(
+    windows: &mut Windows,
+    window: Window,
+    map_state: MapState,
+    override_redirect: bool,
+    adopt: impl FnOnce(Window) -> WindowInfo,
+) -> Option<Event> {
+    if map_state != MapState::VIEWABLE || override_redirect || !windows.manage(window) {
+        return None;
+    }
+    windows.mark_mapped(window);
+    Some(Event::WindowOpened {
+        id: win_id(window),
+        info: adopt(window),
+    })
 }
 
 /// Turns a grabbed key press into the event it means. Keys with no keysym produce
@@ -163,6 +187,31 @@ mod tests {
             run(&mut windows, &unmap(5)),
             Some(Event::WindowClosed(WinId::new(5)))
         );
+    }
+
+    #[test]
+    fn only_showing_client_windows_are_adopted_at_startup() {
+        let mut windows = Windows::default();
+        let adopt = |windows: &mut Windows, window, state, redirect| {
+            existing(windows, window, state, redirect, |_| WindowInfo::default())
+        };
+
+        assert!(adopt(&mut windows, 5, MapState::VIEWABLE, false).is_some());
+        assert!(adopt(&mut windows, 6, MapState::UNMAPPED, false).is_none());
+        assert!(adopt(&mut windows, 7, MapState::UNVIEWABLE, false).is_none());
+        assert!(adopt(&mut windows, 8, MapState::VIEWABLE, true).is_none());
+        assert!(adopt(&mut windows, 5, MapState::VIEWABLE, false).is_none());
+        assert!(windows.is_managed(5));
+        assert!(!windows.is_managed(8));
+    }
+
+    #[test]
+    fn an_adopted_window_is_on_screen_so_hiding_it_unmaps_it() {
+        let mut windows = Windows::default();
+        existing(&mut windows, 5, MapState::VIEWABLE, false, |_| {
+            WindowInfo::default()
+        });
+        assert!(windows.mark_hidden(5));
     }
 
     #[test]

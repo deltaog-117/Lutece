@@ -22,6 +22,7 @@
 | 2026-10-27 | Minimal example exit | Plain loop, stopped from outside | ✅ Confirmed |
 | 2026-10-27 | Nested dev environment | POSIX shell script around Xephyr, fixed spare display | ✅ Confirmed |
 | 2026-10-27 | Key bindings | Engine-owned keymap with a closed `Action` enum | ✅ Confirmed |
+| 2026-10-30 | Adopting existing windows | Scan the root's children at connect, report them as `WindowOpened` | ✅ Confirmed |
 
 ---
 
@@ -597,3 +598,39 @@ It matches what the `KeyPressed` event already promised ("a key combination the 
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-10-27 | Initial entry | deltaog-117 |
+
+---
+
+### Adopting existing windows: scan the root's children at connect
+
+**Date:** 2026-10-30
+**Status:** Confirmed
+
+#### Context / Background
+
+The backend only learned of windows through map requests, so windows already open when it started were never managed and stayed wherever they were. Taking over a running session needs them reported too.
+
+#### Options Considered
+
+Only one approach was credible, so no alternatives were weighed: after redirecting the root, list its children and adopt the ones that are showing. Re-mapping every window to provoke a map request would flash the screen and break clients that expect to stay mapped.
+
+#### Decision & Rationale
+
+**Chosen Option:** scan in `connect`, after the redirect is in place.
+
+Asking after the redirect closes the race: a window that maps later sends a map request, and one that mapped earlier is in the list. The events reuse `WindowOpened`, so the core needed no change and Wayland can do the same for its own sources.
+
+#### Implementation Notes
+
+- Only windows in `Viewable` state and without override-redirect are adopted. Unmapped ones send a map request when they want to show; override-redirect ones (menus, tooltips) opted out of management.
+- An adopted window is recorded as on screen, so hiding it later sends the unmap it needs and the resulting unmap event is not mistaken for a client close.
+- Stacking order from `query_tree` (bottom first) becomes the order of the `WindowOpened` events, so the first-opened window is the lowest.
+- Attribute requests are sent together before any answer is read. A window destroyed in between is skipped.
+- Not done: iconic windows (minimised by a previous WM) are skipped, and every adopted window lands on the first workspace. Both belong to manage rules.
+- Smoke-tested in Xephyr: the example starts and runs with two clients already open. Their resulting geometry was not checked, because `xdotool` and `xwininfo` are not installed; that belongs to the scripted X11 integration tests.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-30 | Initial entry | deltaog-117 |

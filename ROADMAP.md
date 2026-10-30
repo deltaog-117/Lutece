@@ -19,6 +19,7 @@ Author: deltaog-117
 - ✅ Engine and display-free tests – `Engine::handle` applies events, `Engine::scene` derives the scene, checked by event-replay tests and a property test over random event streams
 - ✅ Minimal example WM – `crates/lutece-x11/examples/minimal.rs` wires `Engine` to `X11Backend` in a short `main.rs`
 - ✅ Key bindings – `Keymap` and a closed `Action` enum in `input`; the engine owns the keymap, lists its keys with `Engine::grabs` and runs the action on `KeyPressed`; the X11 backend grabs them (also with CapsLock and NumLock held); the example quits, spawns, moves focus and switches workspaces
+- ✅ Adopt existing windows – `X11Backend::connect` queries the root's children after taking over and reports each showing, non-override-redirect window as `WindowOpened`, so the WM can replace a running one without a restart
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
@@ -31,7 +32,6 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-- **Adopt existing windows** – manage windows that are already mapped when the X11 backend starts.
 - **Manage rules** – float, workspace assignment and ignore rules in `rules`.
 - **Multi-output support** – several screens in the scene, with focus moving between them.
 - **Scripted X11 integration tests** – drive the nested X server with `xdotool` and assert window geometry.
@@ -60,4 +60,4 @@ Author: deltaog-117
 ## 🎯 Next Actions (Immediate)
 
 1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Adopt existing windows** – so the WM can take over a running session.
+2. **Manage rules** – float, workspace assignment and ignore rules in `rules`.
