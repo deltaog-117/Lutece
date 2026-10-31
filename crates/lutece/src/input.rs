@@ -7,5 +7,5 @@
 mod binding;
 mod keymap;
 
-pub use binding::Action;
+pub use binding::{Action, Direction};
 pub use keymap::Keymap;

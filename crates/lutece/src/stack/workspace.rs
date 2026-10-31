@@ -1,8 +1,9 @@
 //! One workspace: an ordered list of windows with exactly one of them focused.
 
+use crate::float::Float;
 use crate::layout::{Layout, MasterRatio};
 use crate::shared::ids::{Tag, WinId};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::iter;
 use std::mem;
 
@@ -141,6 +142,9 @@ pub struct Workspace {
     /// The ratio tile gets back when the layout cycles round to it again. Only read
     /// while another layout is showing.
     tile_ratio: MasterRatio,
+    /// The windows the layout leaves alone. Every key is a window in `stack`: `remove`
+    /// drops the entry and `set_float` refuses strangers.
+    floating: HashMap<WinId, Float>,
 }
 
 impl Workspace {
@@ -154,7 +158,36 @@ impl Workspace {
             stack: None,
             layout,
             tile_ratio,
+            floating: HashMap::new(),
         }
+    }
+
+    /// Whether `id` floats instead of being placed by the layout.
+    #[must_use]
+    pub fn is_floating(&self, id: WinId) -> bool {
+        self.floating.contains_key(&id)
+    }
+
+    pub(crate) fn float_of(&self, id: WinId) -> Option<Float> {
+        self.floating.get(&id).copied()
+    }
+
+    /// The floating windows with their state, in stacking order, bottom first.
+    pub(crate) fn floats(&self) -> impl Iterator<Item = (WinId, Float)> + '_ {
+        self.windows()
+            .filter_map(|id| self.float_of(id).map(|float| (id, float)))
+    }
+
+    /// Makes `id` float with `float`, or tile again with `None`. A window that is not on
+    /// this workspace is ignored.
+    pub(crate) fn set_float(&mut self, id: WinId, float: Option<Float>) {
+        if !self.contains(id) {
+            return;
+        }
+        match float {
+            Some(float) => self.floating.insert(id, float),
+            None => self.floating.remove(&id),
+        };
     }
 
     /// How the workspace arranges its windows.
@@ -234,6 +267,7 @@ impl Workspace {
     }
 
     pub(crate) fn remove(&mut self, id: WinId) {
+        self.floating.remove(&id);
         if let Some(stack) = self.stack.take() {
             self.stack = stack.remove(id);
         }
@@ -328,6 +362,43 @@ mod tests {
         assert_eq!(ws.layout(), Layout::Monocle);
         ws.next_layout();
         assert_eq!(ws.layout(), Layout::Tile(MasterRatio::default()));
+    }
+
+    #[test]
+    fn a_floating_window_is_forgotten_when_it_leaves() {
+        let mut ws = workspace(Layout::default());
+        ws.insert(w(1));
+        ws.insert(w(2));
+        ws.set_float(w(1), Some(Float::default()));
+        assert!(ws.is_floating(w(1)));
+        assert!(!ws.is_floating(w(2)));
+
+        ws.remove(w(1));
+        assert!(!ws.is_floating(w(1)));
+        assert_eq!(ws.floats().count(), 0);
+    }
+
+    #[test]
+    fn only_windows_on_the_workspace_can_float() {
+        let mut ws = workspace(Layout::default());
+        ws.insert(w(1));
+        ws.set_float(w(9), Some(Float::default()));
+        assert!(!ws.is_floating(w(9)));
+
+        ws.set_float(w(1), Some(Float::default()));
+        ws.set_float(w(1), None);
+        assert!(!ws.is_floating(w(1)));
+    }
+
+    #[test]
+    fn floats_come_out_in_stacking_order() {
+        let mut ws = workspace(Layout::default());
+        for id in [1, 2, 3] {
+            ws.insert(w(id));
+            ws.set_float(w(id), Some(Float::default()));
+        }
+        let order: Vec<u64> = ws.floats().map(|(id, _)| id.get()).collect();
+        assert_eq!(order, ws.windows().map(WinId::get).collect::<Vec<_>>());
     }
 
     #[test]

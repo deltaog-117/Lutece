@@ -12,19 +12,22 @@
 //! | Super+space | switch the workspace to its next layout |
 //! | Super+h / Super+l | narrow / widen the master column |
 //! | Super+Shift+1..9 | send the focused window to that workspace |
+//! | Super+f | float the focused window, or tile it again |
+//! | Super+Ctrl+h/j/k/l | move the floating window left / down / up / right |
+//! | Super+Ctrl+Shift+h/j/k/l | narrow / heighten / shorten / widen the floating window |
 //! | Super+Shift+c | close the focused window |
 //! | Super+Shift+q | quit |
 //!
-//! Two manage rules show the rule API: `Xmessage` windows are left to their client, and
-//! `Firefox` opens on workspace 9 without switching to it.
+//! Three manage rules show the rule API: `Xmessage` windows are left to their client,
+//! `Firefox` opens on workspace 9 without switching to it, and dialogs open floating.
 //!
 //! ```text
 //! DISPLAY=:2 cargo run -p lutece-x11 --example minimal
 //! ```
 
 use lutece::{
-    Action, Engine, KeyPress, Keymap, Keysym, Layout, ManageRule, Match, Modifiers, Outcome, Rules,
-    SpawnCommand, StackSet, Tag,
+    Action, Direction, Engine, KeyPress, Keymap, Keysym, Layout, ManageRule, Match, Modifiers,
+    Outcome, Rules, SpawnCommand, StackSet, Tag,
 };
 use lutece_x11::{Flow, X11Backend};
 
@@ -52,6 +55,18 @@ fn keymap(tags: &[Tag]) -> Result<Keymap> {
     keymap.bind(key(' ', Modifiers::SUPER)?, Action::NextLayout)?;
     keymap.bind(key('h', Modifiers::SUPER)?, Action::ShrinkMaster)?;
     keymap.bind(key('l', Modifiers::SUPER)?, Action::GrowMaster)?;
+    keymap.bind(key('f', Modifiers::SUPER)?, Action::ToggleFloat)?;
+    let moving = Modifiers::SUPER | Modifiers::CTRL;
+    let resizing = moving | Modifiers::SHIFT;
+    for (letter, direction) in [
+        ('h', Direction::Left),
+        ('j', Direction::Down),
+        ('k', Direction::Up),
+        ('l', Direction::Right),
+    ] {
+        keymap.bind(key(letter, moving)?, Action::MoveFloat(direction))?;
+        keymap.bind(key(letter, resizing)?, Action::ResizeFloat(direction))?;
+    }
     keymap.bind(key('c', shifted)?, Action::Close)?;
     keymap.bind(key('q', shifted)?, Action::Quit)?;
     for (digit, tag) in ('1'..='9').zip(tags) {
@@ -72,6 +87,7 @@ fn rules(tags: &[Tag]) -> Result<Rules> {
         Match::Class("Firefox".into()),
         Outcome::SendTo(last),
     ));
+    rules.push(ManageRule::new(Match::Dialog, Outcome::Float));
     Ok(rules)
 }
 

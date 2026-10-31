@@ -36,6 +36,9 @@ pub enum Outcome {
     Ignore,
     /// Open the window on the workspace with this tag, without switching to it.
     SendTo(Tag),
+    /// Open the window floating on the current workspace: the layout leaves it alone and
+    /// it is drawn above the tiled windows.
+    Float,
 }
 
 /// One condition and what to do with a window that meets it.
@@ -104,7 +107,7 @@ impl Rules {
     pub fn tags(&self) -> impl Iterator<Item = &Tag> {
         self.rules.iter().filter_map(|rule| match &rule.outcome {
             Outcome::SendTo(tag) => Some(tag),
-            Outcome::Ignore => None,
+            Outcome::Ignore | Outcome::Float => None,
         })
     }
 }

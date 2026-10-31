@@ -10,14 +10,17 @@ use crate::shared::ids::WinId;
 /// How far one key press moves the master column, in thousandths of the width.
 const MASTER_STEP: i16 = 50;
 
+/// How far one key press moves or resizes a floating window, in pixels.
+const FLOAT_STEP: i32 = 40;
+
 impl Engine {
     /// Applies `event` and returns the effects the backend must carry out.
     ///
     /// Events that no longer apply are ignored, not reported: a backend sees close and
     /// focus events for windows it has already lost, and a duplicate open is harmless.
     /// A window that opens is placed by the engine's rules: on the current workspace by
-    /// default, on another one if a rule sends it there, or released to its client with
-    /// [`Effect::Release`] if a rule ignores it.
+    /// default, on another one if a rule sends it there, floating if a rule floats it, or
+    /// released to its client with [`Effect::Release`] if a rule ignores it.
     /// A key press runs the action bound to it in the engine's keymap, and a press with
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
     /// focused window and spawning a program.
@@ -58,6 +61,9 @@ impl Engine {
             Some(Outcome::SendTo(tag)) => {
                 let _ = self.stacks.insert_on(id, tag);
             }
+            Some(Outcome::Float) => {
+                let _ = self.stacks.insert_floating(id);
+            }
             Some(Outcome::Ignore) => {
                 if !self.stacks.contains(id) {
                     effects.push(Effect::Release(id));
@@ -85,6 +91,21 @@ impl Engine {
             }
             Action::MoveToTag(tag) => {
                 let _ = self.stacks.move_focused_to(&tag);
+            }
+            Action::ToggleFloat => self.stacks.toggle_float(),
+            Action::MoveFloat(direction) => {
+                let (dx, dy) = direction.delta(FLOAT_STEP);
+                self.stacks
+                    .update_focused_float(|float| float.moved(dx, dy));
+            }
+            Action::ResizeFloat(direction) => {
+                // A floating size is relative to the screen, so with no screen yet there
+                // is nothing to resize against.
+                if let Some(area) = self.screen {
+                    let (dw, dh) = direction.delta(FLOAT_STEP);
+                    self.stacks
+                        .update_focused_float(|float| float.resized(area, dw, dh));
+                }
             }
         }
     }

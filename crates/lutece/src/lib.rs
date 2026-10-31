@@ -5,6 +5,7 @@
 //! event stream behave identically on every backend.
 
 pub mod engine;
+mod float;
 pub mod input;
 pub mod layout;
 pub mod rules;
@@ -12,7 +13,7 @@ pub mod shared;
 pub mod stack;
 
 pub use engine::Engine;
-pub use input::{Action, Keymap};
+pub use input::{Action, Direction, Keymap};
 pub use layout::{Layout, MasterRatio};
 pub use rules::{ManageRule, Match, Outcome, Rules};
 pub use shared::contracts::effect::{Effect, SpawnCommand};

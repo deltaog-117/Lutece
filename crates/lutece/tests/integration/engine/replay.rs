@@ -1,9 +1,9 @@
 //! Recorded event streams replayed through the engine, with the resulting scene checked.
 
 use lutece::{
-    Action, Change, Effect, Engine, Error, Event, KeyPress, Keymap, Keysym, Layout, ManageRule,
-    Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene, SpawnCommand, StackSet, Tag,
-    WinId, WindowInfo, diff,
+    Action, Change, Direction, Effect, Engine, Error, Event, KeyPress, Keymap, Keysym, Layout,
+    ManageRule, Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene, SpawnCommand,
+    StackSet, Tag, WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -282,6 +282,11 @@ proptest! {
             if model.has_screen {
                 prop_assert_eq!(scene.placements().iter().map(|p| p.id.get()).collect::<BTreeSet<_>>(), current);
                 prop_assert_eq!(scene.focus(), engine.stacks().focused());
+                // Floating windows are always drawn above the tiled ones.
+                let workspace = engine.stacks().current();
+                let floating: Vec<bool> =
+                    scene.placements().iter().map(|p| workspace.is_floating(p.id)).collect();
+                prop_assert!(floating.windows(2).all(|pair| pair[0] <= pair[1]));
             } else {
                 prop_assert!(scene.placements().is_empty());
             }
@@ -320,6 +325,15 @@ fn keymap() -> Keymap {
         (key('n', Modifiers::SUPER), Action::NextLayout),
         (key('g', Modifiers::SUPER), Action::GrowMaster),
         (key('s', Modifiers::SUPER), Action::ShrinkMaster),
+        (key('f', Modifiers::SUPER), Action::ToggleFloat),
+        (
+            key('m', Modifiers::SUPER),
+            Action::MoveFloat(Direction::Left),
+        ),
+        (
+            key('r', Modifiers::SUPER),
+            Action::ResizeFloat(Direction::Right),
+        ),
     ];
     for (press, action) in binds {
         keymap.bind(press, action).expect("distinct bindings");
@@ -334,7 +348,7 @@ fn bound_engine() -> Engine {
 #[test]
 fn the_engine_lists_the_keys_to_grab() {
     let engine = bound_engine();
-    assert_eq!(engine.grabs().count(), 13);
+    assert_eq!(engine.grabs().count(), 16);
     assert_eq!(
         engine.grabs().next(),
         Some(key('q', Modifiers::SUPER | Modifiers::SHIFT))
@@ -490,7 +504,22 @@ fn ruled_engine() -> Engine {
         Match::Class("Firefox".into()),
         Outcome::SendTo(tag("3")),
     ));
+    rules.push(ManageRule::new(Match::Dialog, Outcome::Float));
     engine().with_rules(rules).expect("tag 3 exists")
+}
+
+fn open_dialog(raw: u64, parent: u64) -> Event {
+    Event::WindowOpened {
+        id: w(raw),
+        info: WindowInfo {
+            transient_for: Some(w(parent)),
+            ..WindowInfo::default()
+        },
+    }
+}
+
+fn rect(x: i32, y: i32, width: u32, height: u32) -> Option<Rect> {
+    Some(Rect::new(x, y, width, height).expect("non-zero size"))
 }
 
 #[test]
@@ -535,4 +564,114 @@ fn rules_that_name_a_missing_workspace_are_refused() {
     let mut rules = Rules::new();
     rules.push(ManageRule::new(Match::Dialog, Outcome::SendTo(tag("9"))));
     assert_eq!(engine().with_rules(rules), Err(Error::UnknownTag(tag("9"))));
+}
+
+#[test]
+fn a_float_rule_opens_the_window_above_tiles_that_keep_the_screen() {
+    let mut engine = ruled_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open_dialog(2, 1)]);
+
+    let scene = scene(&engine);
+    assert_eq!(ids(&scene), [1, 2]);
+    assert_eq!(scene.get(w(1)).map(|p| p.rect), rect(0, 0, 1000, 600));
+    assert_eq!(scene.get(w(2)).map(|p| p.rect), rect(200, 120, 600, 360));
+    assert_eq!(scene.focus(), Some(w(2)));
+}
+
+#[test]
+fn a_floating_window_is_above_the_tiles_even_when_it_is_not_focused() {
+    let mut engine = ruled_engine();
+    replay(
+        &mut engine,
+        [screen(1000, 600), open(1), open_dialog(2, 1), open(3)],
+    );
+
+    assert_eq!(ids(&scene(&engine)).last(), Some(&2));
+    assert_eq!(scene(&engine).focus(), Some(w(3)));
+}
+
+#[test]
+fn float_keys_toggle_move_and_resize_the_focused_window() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+
+    // A tiled window ignores move and resize keys.
+    let tiled = engine.clone();
+    replay(
+        &mut engine,
+        [
+            pressed('m', Modifiers::SUPER),
+            pressed('r', Modifiers::SUPER),
+        ],
+    );
+    assert_eq!(engine, tiled);
+
+    replay(&mut engine, [pressed('f', Modifiers::SUPER)]);
+    assert_eq!(
+        scene(&engine).get(w(2)).map(|p| p.rect),
+        rect(200, 120, 600, 360)
+    );
+
+    replay(
+        &mut engine,
+        [
+            pressed('m', Modifiers::SUPER),
+            pressed('r', Modifiers::SUPER),
+        ],
+    );
+    assert_eq!(
+        scene(&engine).get(w(2)).map(|p| p.rect),
+        rect(160, 120, 640, 360)
+    );
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(0, 0, 1000, 600)
+    );
+
+    replay(&mut engine, [pressed('f', Modifiers::SUPER)]);
+    assert!(!engine.stacks().current().is_floating(w(2)));
+    let widths: Vec<u32> = scene(&engine)
+        .placements()
+        .iter()
+        .map(|p| p.rect.width())
+        .collect();
+    assert_eq!(widths.iter().sum::<u32>(), 1000);
+}
+
+#[test]
+fn a_focused_floating_window_stays_a_float_in_monocle() {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [
+            screen(1000, 600),
+            open(1),
+            open(2),
+            pressed('f', Modifiers::SUPER),
+            pressed('n', Modifiers::SUPER),
+        ],
+    );
+
+    let scene = scene(&engine);
+    assert_eq!(ids(&scene), [1, 2]);
+    assert_eq!(scene.get(w(1)).map(|p| p.rect), rect(0, 0, 1000, 600));
+    assert_eq!(scene.get(w(2)).map(|p| p.rect), rect(200, 120, 600, 360));
+}
+
+#[test]
+fn resizing_before_a_screen_exists_changes_nothing() {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [
+            open(1),
+            pressed('f', Modifiers::SUPER),
+            pressed('r', Modifiers::SUPER),
+        ],
+    );
+    replay(&mut engine, [screen(1000, 600)]);
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(200, 120, 600, 360)
+    );
 }

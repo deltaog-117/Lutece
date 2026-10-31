@@ -24,6 +24,7 @@
 | 2026-10-27 | Key bindings | Engine-owned keymap with a closed `Action` enum | ✅ Confirmed |
 | 2026-10-30 | Adopting existing windows | Scan the root's children at connect, report them as `WindowOpened` | ✅ Confirmed |
 | 2026-10-30 | Manage rules | Ignore and workspace rules as data; float waits for floating windows | ✅ Confirmed |
+| 2026-10-31 | Floating windows | Offsets from a centered default rectangle, kept per workspace | ✅ Confirmed |
 
 ---
 
@@ -713,3 +714,44 @@ Every rule it offers does something real, and matching is property-testable. `Ou
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-10-30 | Initial entry | deltaog-117 |
+
+---
+
+### Floating windows: offsets from a default rectangle
+
+**Date:** 2026-10-31
+**Status:** Confirmed
+
+#### Context / Background
+
+The manage rules left a `Float` outcome for later, because the core knows neither a window's size nor the pointer. A floating window needs a rectangle from somewhere, and a way to change it.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Default rectangle plus move and resize keys | Complete feature, core only, property-testable | Every floating window starts the same size | M |
+| B. The window's requested size plus keys | Windows open at the right size | New `WindowInfo` field and X11 geometry query | H |
+| C. Float outcome only, fixed rectangle | Smallest change | No move or resize; needs a follow-up | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+It delivers the whole roadmap item inside the core, where the model-based and replay tests already live. B only adds the initial size, which can later seed the same state from `WindowInfo`.
+
+#### Implementation Notes
+
+- A `Float` stores how far the window was moved and resized from a default rectangle (60% of the screen, centered), not a rectangle. It is therefore valid before a screen is reported and follows the screen when it changes; `Float::rect` never fails except through `Size::new`, which it cannot trip because the size has a 64-pixel floor.
+- Resizing clamps the stored offset at the floor, not just the drawn size. Otherwise shrinking past the floor would build up a hidden debt and the next grow key would seem to do nothing.
+- Float state lives in `Workspace`, next to the stack. `remove` drops it, `set_float` refuses windows the workspace lacks, and `move_focused_to` carries it across, so a floating window is always a window of its workspace.
+- The scene lists tiled windows as the layout places them, then the floating ones in stack order, so floating windows are always on top. The layout only sees tiled windows; in monocle a focused floating window is not in that list and the layout ignores it.
+- The move and resize actions take a `Direction`; for resize, right and down grow, left and up shrink. Moving or resizing a tiled window does nothing, and resizing with no screen does nothing.
+- Not done: the window's own requested size (option B), mouse move and resize, raising a floating window on focus, and keeping a window on screen.
+- Not tested against a real X server: `xdotool` is not installed. The X11 backend needed no change, since it already applies placements in order.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-31 | Initial entry | deltaog-117 |

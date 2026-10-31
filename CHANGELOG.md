@@ -55,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Effect::Release`: the core stops managing a window and leaves it to its client; the X11 backend maps it, forgets it and answers its configure requests as it asks
 - Tests for rule matching and order, for send and ignore rules replayed through the engine, and for a released window never being reported again
 - The `minimal` example ignores `Xmessage` windows and opens `Firefox` on workspace 9
+- Floating windows: a floating window is left out of the layout and drawn above the tiled ones, in the scene `Engine::scene` builds
+- `Outcome::Float`, which opens a matching window floating on the current workspace
+- Actions `ToggleFloat`, `MoveFloat(Direction)` and `ResizeFloat(Direction)`, and the `Direction` type; a step is 40 pixels and the smallest size is 64 pixels
+- `Workspace::is_floating` and `StackSet::toggle_float`; a window keeps floating, and its place, when it moves to another workspace
+- Tests for the float arithmetic (valid rectangle for any input, undoable moves, no dead zone at the size floor), for float state on workspaces, and for float rules and keys replayed through the engine
+- The `minimal` example floats dialogs and binds Super+f (toggle), Super+Ctrl+h/j/k/l (move) and Super+Ctrl+Shift+h/j/k/l (resize)
 
 ### Changed
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with

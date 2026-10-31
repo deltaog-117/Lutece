@@ -2,6 +2,7 @@
 //! changes in response to events; it never touches a display.
 
 use super::workspace::Workspace;
+use crate::float::Float;
 use crate::layout::Layout;
 use crate::shared::error::{Error, Result};
 use crate::shared::ids::{Tag, WinId};
@@ -143,6 +144,37 @@ impl StackSet {
         Ok(())
     }
 
+    /// Adds a window to the current workspace as a floating window and focuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DuplicateWindow`] if the window is already managed.
+    pub(crate) fn insert_floating(&mut self, id: WinId) -> Result<()> {
+        self.insert(id)?;
+        self.current.set_float(id, Some(Float::default()));
+        Ok(())
+    }
+
+    /// Floats the focused window, or tiles it again if it floats. Does nothing on an
+    /// empty workspace.
+    pub fn toggle_float(&mut self) {
+        let Some(id) = self.current.focus() else {
+            return;
+        };
+        let float = (!self.current.is_floating(id)).then(Float::default);
+        self.current.set_float(id, float);
+    }
+
+    /// Changes the focused window's float state. Does nothing if it is tiled.
+    pub(crate) fn update_focused_float(&mut self, change: impl FnOnce(Float) -> Float) {
+        let Some(id) = self.current.focus() else {
+            return;
+        };
+        if let Some(float) = self.current.float_of(id) {
+            self.current.set_float(id, Some(change(float)));
+        }
+    }
+
     /// Removes a window from whichever workspace holds it.
     ///
     /// # Errors
@@ -241,10 +273,13 @@ impl StackSet {
         let Some(id) = self.current.focus() else {
             return Ok(());
         };
+        // A window keeps floating, and where it was put, when it changes workspace.
+        let float = self.current.float_of(id);
         self.current.remove(id);
         // `target` came from `index_of_tag`, so the workspace exists.
         if let Some(workspace) = self.workspaces_mut().nth(target) {
             workspace.insert(id);
+            workspace.set_float(id, float);
         }
         Ok(())
     }
@@ -314,6 +349,45 @@ mod tests {
             .windows()
             .map(WinId::get)
             .collect()
+    }
+
+    #[test]
+    fn a_floating_window_keeps_floating_and_its_place_on_another_workspace() {
+        let mut set = set();
+        set.insert_floating(w(1)).expect("new window");
+        set.update_focused_float(|float| float.moved(30, 40));
+        let placed = set.current().float_of(w(1));
+
+        set.move_focused_to(&tag("2")).expect("workspace exists");
+        let target = set.workspaces().nth(1).expect("second workspace");
+        assert!(target.is_floating(w(1)));
+        assert_eq!(target.float_of(w(1)), placed);
+        assert!(!set.current().is_floating(w(1)));
+    }
+
+    #[test]
+    fn toggling_floats_the_focused_window_and_tiles_it_again() {
+        let mut set = set();
+        set.toggle_float();
+        assert!(set.workspaces().all(|ws| ws.floats().count() == 0));
+
+        set.insert(w(1)).expect("new window");
+        set.insert(w(2)).expect("new window");
+        set.toggle_float();
+        assert!(set.current().is_floating(w(2)));
+        assert!(!set.current().is_floating(w(1)));
+
+        set.toggle_float();
+        assert!(!set.current().is_floating(w(2)));
+    }
+
+    #[test]
+    fn a_tiled_window_ignores_float_changes() {
+        let mut set = set();
+        set.insert(w(1)).expect("new window");
+        let before = set.clone();
+        set.update_focused_float(|float| float.moved(5, 5));
+        assert_eq!(set, before);
     }
 
     #[test]

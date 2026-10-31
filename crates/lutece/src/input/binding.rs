@@ -36,4 +36,39 @@ pub enum Action {
     /// Send the focused window to the workspace with this tag. Does nothing if there is
     /// none.
     MoveToTag(Tag),
+    /// Float the focused window if it is tiled, or tile it again if it floats.
+    ToggleFloat,
+    /// Move the focused window a step this way. Does nothing unless it floats.
+    MoveFloat(Direction),
+    /// Resize the focused window by a step: right and down widen and heighten it, left
+    /// and up narrow and shorten it. Does nothing unless it floats.
+    ResizeFloat(Direction),
+}
+
+/// One of the four ways a floating window can be nudged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
+pub enum Direction {
+    /// Towards the left edge.
+    Left,
+    /// Towards the right edge.
+    Right,
+    /// Towards the top edge.
+    Up,
+    /// Towards the bottom edge.
+    Down,
+}
+
+impl Direction {
+    /// The horizontal and vertical change of a step of `size` pixels; screen
+    /// coordinates grow to the right and downwards.
+    pub(crate) const fn delta(self, size: i32) -> (i32, i32) {
+        match self {
+            Self::Left => (-size, 0),
+            Self::Right => (size, 0),
+            Self::Up => (0, -size),
+            Self::Down => (0, size),
+        }
+    }
 }
