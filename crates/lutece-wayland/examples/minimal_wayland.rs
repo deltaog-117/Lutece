@@ -26,17 +26,20 @@
 //! menus are shown above their window and kept on its output. Clients are asked to draw no
 //! title bar of their own.
 //!
+//! X11 programs run too, through Xwayland, and their windows are tiled like the others.
+//! Programs started with Alt+Return find it through `DISPLAY`.
+//!
 //! The window can stand for several monitors: `LUTECE_OUTPUTS=2` cuts it into two outputs
 //! side by side.
 //!
 //! ```text
-//! cargo run -p lutece-wayland --example minimal
+//! cargo run -p lutece-wayland --example minimal_wayland
 //! ```
 
 use lutece::{
     Action, Engine, KeyPress, Keymap, Keysym, Layout, Modifiers, SpawnCommand, StackSet, Tag,
 };
-use lutece_wayland::{Flow, NestedBackend};
+use lutece_wayland::{Error, Flow, NestedBackend};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -100,8 +103,25 @@ fn main() -> Result<()> {
         backend.socket_name().to_string_lossy()
     );
 
+    if let Err(error) = backend.enable_xwayland() {
+        eprintln!("lutece: no X11 programs: {error}");
+    }
+    let mut said_display = false;
+
     while !backend.is_closed() {
-        for event in backend.next_events(IDLE_WAIT)? {
+        if !said_display && let Some(number) = backend.xwayland_display() {
+            eprintln!("lutece: X11 clients connect with DISPLAY=:{number}");
+            said_display = true;
+        }
+        let events = match backend.next_events(IDLE_WAIT) {
+            // Wayland programs still work without X11 ones.
+            Err(error @ Error::XWayland(_)) => {
+                eprintln!("lutece: no X11 programs: {error}");
+                continue;
+            }
+            other => other?,
+        };
+        for event in events {
             if backend.apply_effects(&engine.handle(event))? == Flow::Quit {
                 return Ok(());
             }

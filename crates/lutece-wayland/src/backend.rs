@@ -18,6 +18,7 @@ use smithay::input::pointer::CursorImageStatus;
 use smithay::output::{
     Mode, Output as WlOutput, PhysicalProperties, Scale as OutputScale, Subpixel,
 };
+use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::utils::Point;
@@ -61,6 +62,10 @@ pub struct WaylandBackend {
     display: Display<State>,
     listener: ListeningSocket,
     state: State,
+    /// Runs Xwayland and its window manager. It never blocks: the caller's own loop
+    /// waits, and this one is stepped from it.
+    event_loop: EventLoop<'static, State>,
+    xwayland_enabled: bool,
     scene: Scene,
     /// Invariant: each output id appears once.
     screens: Vec<Screen>,
@@ -92,6 +97,9 @@ impl WaylandBackend {
             display,
             listener,
             state,
+            event_loop: EventLoop::try_new()
+                .map_err(|error| io::Error::other(error.to_string()))?,
+            xwayland_enabled: false,
             scene: Scene::empty(),
             screens: Vec::new(),
         };
@@ -121,6 +129,33 @@ impl WaylandBackend {
             rect,
         }]);
         Ok(())
+    }
+
+    /// Lets X11 programs run: starts Xwayland, an X server that shows each X11 window as
+    /// a window of this compositor. Those windows reach the core as any other and are
+    /// placed by its scenes; their menus and tooltips are drawn where their program asks.
+    /// Programs started by a spawn effect find it through `DISPLAY` once it is up.
+    ///
+    /// Xwayland takes a moment to start; [`xwayland_display`](Self::xwayland_display)
+    /// tells when it is ready. Calling this again does nothing. Copying between X11 and
+    /// Wayland programs is not supported yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the `Xwayland` program cannot be started.
+    pub fn enable_xwayland(&mut self) -> Result<()> {
+        if self.xwayland_enabled {
+            return Ok(());
+        }
+        crate::xwayland::start(&self.event_loop.handle(), &self.display.handle())?;
+        self.xwayland_enabled = true;
+        Ok(())
+    }
+
+    /// The X11 display number (`:N`) of Xwayland, once it is ready to serve X11 programs.
+    #[must_use]
+    pub fn xwayland_display(&self) -> Option<u32> {
+        self.state.x_display
     }
 
     /// Sets how many physical pixels one logical pixel is on the screen the compositor
@@ -229,6 +264,9 @@ impl WaylandBackend {
             self.wait(timeout)?;
         }
         self.pump()?;
+        if let Some(why) = self.state.xwayland_failure.take() {
+            return Err(Error::XWayland(why));
+        }
         Ok(std::mem::take(&mut self.state.events))
     }
 
@@ -343,6 +381,7 @@ impl WaylandBackend {
         let mut fds = [
             PollFd::new(&self.listener, PollFlags::IN),
             PollFd::new(&clients, PollFlags::IN),
+            PollFd::new(&self.event_loop, PollFlags::IN),
         ];
         poll(&mut fds, Some(&timeout)).map_err(io::Error::from)?;
         Ok(())
@@ -354,6 +393,9 @@ impl WaylandBackend {
                 .handle()
                 .insert_client(stream, Arc::new(ClientState::default()))?;
         }
+        self.event_loop
+            .dispatch(Some(Duration::ZERO), &mut self.state)
+            .map_err(|error| io::Error::other(error.to_string()))?;
         self.display.dispatch_clients(&mut self.state)?;
         self.state.popups.cleanup();
         self.display.flush_clients()?;

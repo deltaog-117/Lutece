@@ -37,7 +37,10 @@ impl State {
         let Some(entry) = self.windows.get(id) else {
             return;
         };
-        let surfaces = window_surfaces(entry.toplevel.wl_surface());
+        let Some(root) = entry.shell.wl_surface() else {
+            return;
+        };
+        let surfaces = window_surfaces(&root);
         for (area, output) in &self.wl_outputs {
             let on = entry.rect.is_some_and(|rect| overlaps(rect, *area));
             for surface in &surfaces {
@@ -68,7 +71,10 @@ impl State {
     /// believing a surface is on a screen that is gone.
     pub(crate) fn leave_outputs(&self, gone: &[WlOutput]) {
         for (_, entry) in self.windows.entries() {
-            for surface in window_surfaces(entry.toplevel.wl_surface()) {
+            let Some(root) = entry.shell.wl_surface() else {
+                continue;
+            };
+            for surface in window_surfaces(&root) {
                 for output in gone {
                     output.leave(&surface);
                 }

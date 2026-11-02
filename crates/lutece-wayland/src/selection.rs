@@ -5,7 +5,7 @@
 //! another client copied.
 
 use crate::compositor::State;
-use smithay::input::{Seat, SeatHandler};
+use smithay::input::Seat;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::selection::SelectionHandler;
@@ -20,13 +20,8 @@ use smithay::{delegate_data_device, delegate_primary_selection};
 
 impl State {
     /// Points both selections at the client that owns `focused`, or at nobody.
-    pub(crate) fn follow_selection_focus(
-        &self,
-        seat: &Seat<Self>,
-        focused: Option<&<Self as SeatHandler>::KeyboardFocus>,
-    ) {
-        let client =
-            focused.and_then(|surface: &WlSurface| self.display.get_client(surface.id()).ok());
+    pub(crate) fn follow_selection_focus(&self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        let client = focused.and_then(|surface| self.display.get_client(surface.id()).ok());
         set_data_device_focus(&self.display, seat, client.clone());
         set_primary_focus(&self.display, seat, client);
     }

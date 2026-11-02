@@ -36,6 +36,7 @@
 | 2026-11-02 | Wayland host scale | Fractional scale in 120ths: logical core, `wp_fractional_scale` and `wp_viewporter` for clients | ✅ Confirmed |
 | 2026-11-02 | Wayland output enter | Worked out from window and output rectangles, not from the render pass | ✅ Confirmed |
 | 2026-11-02 | Wayland dmabuf | `linux-dmabuf` v4 with the render GPU named, fed by the host that owns the renderer | ✅ Confirmed |
+| 2026-11-02 | XWayland | Smithay's window manager on a loop kept inside the backend; windows and menus, no clipboard bridge yet | ✅ Confirmed |
 
 ---
 
@@ -1158,6 +1159,53 @@ For the enter, the render-pass helper in Smithay was rejected: it needs the rend
 - **Tests:** protocol tests with a real client for enters at the seam, on move, hide, unplug and output growth, for buffer scale and a later change, for popups, and for the dmabuf global, its feedback (device and table size) and buffer creation, using a synthetic format list since no GPU is involved.
 - **Not verified:** a real GPU client in the nested window; that the EGL device gives a render node on this machine; text sharpness of a GTK 3 client at 1.5.
 - **Not done:** per-surface dmabuf feedback for scan-out (belongs with the DRM backend); the legacy `wl_drm` path.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### XWayland windows: a loop inside the backend, menus handled, clipboard left out
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+X11 programs (Steam, older Java and Electron apps) cannot speak Wayland. Xwayland is an X server that runs as a client of the compositor and shows each X11 window as a surface. The roadmap item was to treat those windows as one more window source. The same cycle ran the X11 integration tests for the first time on a real `Xvfb` and added the missing XTEST drag test; those are recorded below because they changed what is known about the tests.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Windows plus menus and tooltips | Most useful per unit of work, reuses the popup logic | No X11/Wayland clipboard, Xwayland starts eagerly | M |
+| B. Normal windows only | Smallest | Menus invisible, half the job redone later | S |
+| C. A plus clipboard bridge plus start on demand | Complete | Touches the clipboard code, hardest to test | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** A. It ranked first on correctness and fit (X11 windows go through the same `WindowOpened` path and one scene; menus reuse the layer and hit-test code) without B's unusable menus or C's extra risk. The clipboard bridge and starting on demand are separate roadmap items.
+
+#### Implementation Notes
+
+- **The loop:** Smithay runs Xwayland and its window manager on a `calloop` loop, and this backend is driven by the caller's loop. The backend now holds a `calloop` `EventLoop` of its own, steps it without waiting in `next_events`, and polls its file descriptor with the other two, so the caller's loop is still the only one that blocks.
+- **One window type:** a managed window is a `Shell`, either a Wayland toplevel or an X11 window. The few places that read the toplevel directly (placing, focusing, closing, presence, popups) go through it. A `Layer` may now belong to no managed window; the pointer then asks for no focus and starts no drag.
+- **When an X11 window is announced:** after its map request has been granted and its surface has been tied to it. The tie happens when the X11 window's serial and the surface's serial meet, in either order, so the check runs at both events. Doing it only at a commit missed it: the window is tied just before the commit hook the backend sees.
+- **Placing:** one configure request with position and size. A configure request from a managed window is answered with its current geometry; anything else gets what it asks for.
+- **Menus (override-redirect):** tracked when mapped, never given to the core, drawn in front of all windows at the geometry their program set, uncut. Moving the pointer onto one resets which window the pointer is over, so it asks for no focus.
+- **Keyboard focus:** a Wayland surface alone does not give an X11 window the X input focus (the test saw `PointerRoot`). Smithay does it when the X11 window is the focus target, so the seat's focus type is now a small enum of either kind; selections still follow the surface.
+- **Xwayland as a client:** its client data differs from the other clients', so the compositor state lookup tries both. The `xwayland_shell` global is created at start but only Xwayland can see it.
+- **Spawned programs** get `DISPLAY` once Xwayland is ready, so they use it and not the session's X server.
+- **Failure:** a failed start (the program exits, or its window manager cannot connect) is stored and returned once by `next_events` as `Error::XWayland`; the events collected in that call are returned by the next one.
+- **Tests:** a real Xwayland and an X11 client built with `x11rb`: reported with title and class, placed, two windows share the screen, close, menu unmanaged and in front, X input focus. They skip when `Xwayland` is missing unless `LUTECE_REQUIRE_X11` is set.
+- **Test pitfalls found:** a window keeps its small original buffer until its program redraws (no frame callbacks are sent in tests), so a pointer point has to be inside that buffer, not inside the placed rectangle.
+- **X11 tests run for the first time:** 18 of 18 failed at first, then 17 passed, then all. Cause one: both examples were named `minimal`, so building the Wayland example overwrote the X11 binary in `target/<profile>/examples`; the Wayland one is now `minimal_wayland`. Cause two: the key-swap helper read the second key after overwriting the first. `monitors` passed, so RandR changes on `Xvfb` reach the backend.
+- **Drag tests:** left-drag moves by the pointer distance, right-drag resizes, no modifier changes nothing, with XTEST button and motion events.
+- **Not verified:** nothing has been seen on screen. Real X11 programs, scaled output with X11 windows, and the clipboard are untested.
+- **Not done:** the X11/Wayland clipboard bridge; starting Xwayland on demand; stacking and active-window hints for the X side; honouring a program's own move and resize requests (they are ignored on purpose, the core owns geometry).
 
 #### Review / Update Log
 

@@ -27,6 +27,7 @@ mod backend;
 mod compositor;
 mod dmabuf;
 mod error;
+mod focus;
 mod nested;
 mod pointer;
 mod popup;
@@ -36,6 +37,7 @@ mod scale;
 mod selection;
 mod translate;
 mod windows;
+mod xwayland;
 
 pub use apply::Flow;
 pub use backend::{ButtonAction, KeyAction, WaylandBackend};

@@ -61,7 +61,7 @@ impl State {
         let Some(root) = self
             .windows
             .get(id)
-            .map(|entry| entry.toplevel.wl_surface().clone())
+            .and_then(|entry| entry.shell.wl_surface())
         else {
             return;
         };

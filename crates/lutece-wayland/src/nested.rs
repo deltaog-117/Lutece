@@ -148,6 +148,21 @@ impl NestedBackend {
         self.wayland.set_drag_modifier(modifier);
     }
 
+    /// Lets X11 programs run; see [`WaylandBackend::enable_xwayland`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `Xwayland` program cannot be started.
+    pub fn enable_xwayland(&mut self) -> Result<()> {
+        self.wayland.enable_xwayland()
+    }
+
+    /// The X11 display number of Xwayland, once it is ready.
+    #[must_use]
+    pub fn xwayland_display(&self) -> Option<u32> {
+        self.wayland.xwayland_display()
+    }
+
     /// Collects what happened in the window and among the clients. A grabbed key press
     /// arrives as [`Event::KeyPressed`]; every other key goes to the focused client.
     ///

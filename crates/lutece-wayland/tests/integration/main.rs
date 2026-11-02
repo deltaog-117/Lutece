@@ -10,3 +10,4 @@ mod presence;
 mod protocol;
 mod scale;
 mod support;
+mod xwayland;

@@ -5,6 +5,7 @@
 //! every later size or focus decision arrives from the core as a scene.
 
 use crate::dmabuf::Dmabufs;
+use crate::focus::Focus;
 use crate::pointer::PointerState;
 use crate::scale::Scale;
 use crate::translate;
@@ -40,6 +41,8 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::xwayland_shell::XWaylandShellState;
+use smithay::xwayland::{X11Wm, XWaylandClientData};
 use smithay::{
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
     delegate_viewporter, delegate_xdg_shell,
@@ -77,6 +80,14 @@ pub(crate) struct State {
     pub(crate) grabs: HashSet<KeyPress>,
     /// Keys whose press was taken, so their release is taken too.
     suppressed: HashSet<Keycode>,
+    /// Lets Xwayland tie an X11 window to its surface. Only Xwayland can use it.
+    pub(crate) xwayland_shell: XWaylandShellState,
+    /// The window manager side of Xwayland, once it is running.
+    pub(crate) xwm: Option<X11Wm>,
+    /// The X11 display number programs use to reach Xwayland, once it is running.
+    pub(crate) x_display: Option<u32>,
+    /// Why Xwayland could not start, until the caller has been told.
+    pub(crate) xwayland_failure: Option<String>,
 }
 
 /// Per-client data the protocol implementations need.
@@ -125,6 +136,10 @@ impl State {
             events: Vec::new(),
             grabs: HashSet::new(),
             suppressed: HashSet::new(),
+            xwayland_shell: XWaylandShellState::new::<Self>(display),
+            xwm: None,
+            x_display: None,
+            xwayland_failure: None,
         })
     }
 
@@ -221,11 +236,11 @@ impl State {
     }
 
     /// Tells the keyboard which window has focus, and which toplevel looks active.
-    pub(crate) fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
+    pub(crate) fn set_keyboard_focus(&mut self, focus: Option<Focus>) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
-        keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+        keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
     }
 }
 
@@ -235,11 +250,15 @@ impl CompositorHandler for State {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        // Every client is inserted by the backend with a `ClientState`, so this cannot fail.
+        // Every client is inserted by the backend with a `ClientState`, except Xwayland,
+        // which Smithay inserts with its own data.
+        if let Some(state) = client.get_data::<ClientState>() {
+            return &state.compositor;
+        }
         &client
-            .get_data::<ClientState>()
-            .expect("every client is inserted with a ClientState")
-            .compositor
+            .get_data::<XWaylandClientData>()
+            .expect("every client is inserted with a ClientState or is Xwayland")
+            .compositor_state
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -248,6 +267,8 @@ impl CompositorHandler for State {
         self.popups.commit(surface);
         self.complete_popup_handshake(surface);
         self.announce(surface);
+        // An X11 window is announced once its surface has its first commit.
+        self.announce_x11_windows();
     }
 
     fn new_subsurface(&mut self, _surface: &WlSurface, parent: &WlSurface) {
@@ -312,7 +333,7 @@ impl XdgShellHandler for State {
 }
 
 impl SeatHandler for State {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = Focus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
 
@@ -320,8 +341,9 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
 
-    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        self.follow_selection_focus(seat, focused);
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Focus>) {
+        let surface = focused.and_then(Focus::surface);
+        self.follow_selection_focus(seat, surface.as_ref());
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {

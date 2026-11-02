@@ -39,7 +39,8 @@ struct Drag {
 
 /// What is under the pointer.
 struct Hit {
-    id: WinId,
+    /// The managed window it belongs to; an X11 menu belongs to none.
+    id: Option<WinId>,
     surface: WlSurface,
     /// Where the surface's own origin is, which is what the protocol wants as focus.
     origin: Point<f64, Logical>,
@@ -95,7 +96,7 @@ impl State {
             return;
         }
         let hit = self.surface_under(location);
-        self.follow_pointer(hit.as_ref().map(|hit| hit.id));
+        self.follow_pointer(hit.as_ref().and_then(|hit| hit.id));
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -178,11 +179,14 @@ impl State {
         let Some(kind) = drag_kind(button) else {
             return false;
         };
-        let Some(hit) = self.surface_under(self.pointer.location) else {
+        let Some(id) = self
+            .surface_under(self.pointer.location)
+            .and_then(|hit| hit.id)
+        else {
             return false;
         };
         self.pointer.drag = Some(Drag {
-            id: hit.id,
+            id,
             kind,
             button,
             last: self.pointer.location,

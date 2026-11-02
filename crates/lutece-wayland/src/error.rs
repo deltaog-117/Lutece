@@ -36,6 +36,9 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    /// Xwayland, which runs X11 programs, could not be started.
+    #[error("cannot run X11 programs: Xwayland {0}")]
+    XWayland(String),
     /// The core rejected a value built from what the backend reported.
     #[error(transparent)]
     Core(#[from] lutece::Error),

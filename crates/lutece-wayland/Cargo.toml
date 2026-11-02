@@ -11,11 +11,12 @@ workspace = true
 [dependencies]
 lutece = { path = "../lutece" }
 rustix = { version = "1", features = ["event"] }
-smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "backend_drm", "renderer_gl", "wayland_frontend", "desktop"] }
+smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "backend_drm", "renderer_gl", "wayland_frontend", "desktop", "xwayland"] }
 thiserror = "2"
 
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"
 wayland-client = "0.31"
+x11rb = "0.14"
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }

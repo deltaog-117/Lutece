@@ -3,6 +3,12 @@
 //! A toplevel starts out *pending*: its client has created it but not yet committed, so
 //! its title and app id are not final. The first commit announces it to the core and
 //! makes it *managed*.
+//!
+//! A window of an X11 program (through Xwayland) is the same to the core. It waits as
+//! *pending* until its X11 map request has been granted and its surface has been
+//! committed, and is then announced. X11 menus and tooltips (*override-redirect* windows)
+//! place themselves and are never managed: they are drawn above everything, where their
+//! program put them.
 
 use lutece::{Rect, WinId};
 use smithay::desktop::PopupManager;
@@ -10,20 +16,48 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
+use smithay::xwayland::X11Surface;
 use std::collections::HashMap;
 
-/// A managed toplevel and where the core last put it.
+/// The client behind a window: a Wayland toplevel, or an X11 window of Xwayland.
+#[derive(Debug, Clone)]
+pub(crate) enum Shell {
+    Xdg(ToplevelSurface),
+    X11(X11Surface),
+}
+
+impl Shell {
+    /// The window's surface. An X11 window has none until its surface is committed.
+    pub(crate) fn wl_surface(&self) -> Option<WlSurface> {
+        match self {
+            Self::Xdg(toplevel) => Some(toplevel.wl_surface().clone()),
+            Self::X11(window) => window.wl_surface(),
+        }
+    }
+
+    /// Asks the client to close the window.
+    pub(crate) fn close(&self) {
+        match self {
+            Self::Xdg(toplevel) => toplevel.send_close(),
+            // The window may already be gone; the core hears of that from its own event.
+            Self::X11(window) => drop(window.close()),
+        }
+    }
+}
+
+/// A managed window and where the core last put it.
 #[derive(Debug)]
 pub(crate) struct Entry {
-    pub(crate) toplevel: ToplevelSurface,
+    pub(crate) shell: Shell,
     /// `None` while the window is hidden.
     pub(crate) rect: Option<Rect>,
 }
 
 /// One surface tree that is on screen: a window, or a popup that belongs to one.
 pub(crate) struct Layer {
-    /// The window it belongs to.
-    pub(crate) id: WinId,
+    /// The window it belongs to; `None` for an X11 menu, which belongs to no managed
+    /// window.
+    pub(crate) id: Option<WinId>,
     pub(crate) surface: WlSurface,
     /// Where the surface's own origin is on the output.
     pub(crate) origin: Point<i32, Logical>,
@@ -40,6 +74,10 @@ pub(crate) struct Layer {
 pub(crate) struct Windows {
     next_id: u64,
     pending: Vec<ToplevelSurface>,
+    /// X11 windows whose map request was granted and whose surface is not committed yet.
+    pending_x11: Vec<X11Surface>,
+    /// Mapped X11 menus and tooltips, oldest first.
+    override_redirect: Vec<X11Surface>,
     managed: HashMap<WinId, Entry>,
     /// Stacking order, bottom to top.
     order: Vec<WinId>,
@@ -52,27 +90,86 @@ impl Windows {
     }
 
     /// Moves the pending toplevel behind `surface`, if there is one, to the managed set.
-    pub(crate) fn announce(&mut self, surface: &WlSurface) -> Option<(WinId, &ToplevelSurface)> {
+    pub(crate) fn announce(&mut self, surface: &WlSurface) -> Option<(WinId, ToplevelSurface)> {
         let at = self
             .pending
             .iter()
             .position(|toplevel| toplevel.wl_surface() == surface)?;
         let toplevel = self.pending.swap_remove(at);
+        let id = self.manage(Shell::Xdg(toplevel.clone()));
+        Some((id, toplevel))
+    }
+
+    fn manage(&mut self, shell: Shell) -> WinId {
         let id = WinId::new(self.next_id);
         self.next_id += 1;
         self.order.push(id);
-        let entry = self.managed.entry(id).or_insert(Entry {
-            toplevel,
-            rect: None,
-        });
-        Some((id, &entry.toplevel))
+        self.managed.insert(id, Entry { shell, rect: None });
+        id
     }
 
-    /// The id of the managed toplevel behind `surface`.
+    /// Remembers an X11 window whose map request was granted, until its surface is
+    /// committed. Asking twice for the same window changes nothing.
+    pub(crate) fn track_x11(&mut self, window: X11Surface) {
+        let known = self.id_of_x11(window.window_id()).is_some()
+            || self
+                .pending_x11
+                .iter()
+                .any(|pending| pending.window_id() == window.window_id());
+        if !known {
+            self.pending_x11.push(window);
+        }
+    }
+
+    /// Moves every pending X11 window that has a committed surface to the managed set.
+    pub(crate) fn announce_x11(&mut self) -> Vec<(WinId, X11Surface)> {
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_x11)
+            .into_iter()
+            .partition(|window| window.wl_surface().is_some());
+        self.pending_x11 = waiting;
+        ready
+            .into_iter()
+            .map(|window| (self.manage(Shell::X11(window.clone())), window))
+            .collect()
+    }
+
+    /// Remembers a mapped X11 menu or tooltip, drawn above every window.
+    pub(crate) fn show_override_redirect(&mut self, window: X11Surface) {
+        if !self
+            .override_redirect
+            .iter()
+            .any(|shown| shown.window_id() == window.window_id())
+        {
+            self.override_redirect.push(window);
+        }
+    }
+
+    /// The id of the managed window behind `surface`.
     pub(crate) fn id_of(&self, surface: &WlSurface) -> Option<WinId> {
+        self.managed.iter().find_map(|(id, entry)| {
+            (entry.shell.wl_surface().as_ref() == Some(surface)).then_some(*id)
+        })
+    }
+
+    /// The id of the managed X11 window numbered `window` on the X server.
+    pub(crate) fn id_of_x11(&self, window: u32) -> Option<WinId> {
         self.managed
             .iter()
-            .find_map(|(id, entry)| (entry.toplevel.wl_surface() == surface).then_some(*id))
+            .find_map(|(id, entry)| match &entry.shell {
+                Shell::X11(managed) => (managed.window_id() == window).then_some(*id),
+                Shell::Xdg(_) => None,
+            })
+    }
+
+    /// Forgets an X11 window that was unmapped or destroyed, whatever it was. Returns its
+    /// id if the core knew it.
+    pub(crate) fn remove_x11(&mut self, window: &X11Surface) -> Option<WinId> {
+        let same = |other: &X11Surface| other.window_id() == window.window_id();
+        self.pending_x11.retain(|pending| !same(pending));
+        self.override_redirect.retain(|shown| !same(shown));
+        let id = self.id_of_x11(window.window_id())?;
+        self.release(id);
+        Some(id)
     }
 
     /// The managed window with this id.
@@ -85,13 +182,22 @@ impl Windows {
         self.managed.get_mut(&id)
     }
 
-    /// Every toplevel surface, announced or not.
+    /// Every window surface, announced or not, X11 menus included. An X11 window whose
+    /// surface is not committed yet has none.
     pub(crate) fn toplevel_surfaces(&self) -> Vec<WlSurface> {
-        self.pending
+        let xdg = self
+            .pending
             .iter()
-            .chain(self.managed.values().map(|entry| &entry.toplevel))
-            .map(|toplevel| toplevel.wl_surface().clone())
-            .collect()
+            .map(|toplevel| toplevel.wl_surface().clone());
+        let managed = self
+            .managed
+            .values()
+            .filter_map(|entry| entry.shell.wl_surface());
+        let menus = self
+            .override_redirect
+            .iter()
+            .filter_map(X11Surface::wl_surface);
+        xdg.chain(managed).chain(menus).collect()
     }
 
     /// All managed windows.
@@ -131,42 +237,61 @@ impl Windows {
         self.order = next;
     }
 
-    /// Everything on screen from front to back: for each placed window, from the top of
-    /// the stack down, its popups (the newest first) and then the window itself. A
-    /// hidden window has no rectangle and has no layers.
+    /// Everything on screen from front to back: X11 menus first, then for each placed
+    /// window, from the top of the stack down, its popups (the newest first) and then the
+    /// window itself. A hidden window has no rectangle and has no layers.
     pub(crate) fn layers(&self) -> Vec<Layer> {
-        self.order
+        let menus = self.override_redirect.iter().rev().filter_map(|window| {
+            Some(Layer {
+                id: None,
+                surface: window.wl_surface()?,
+                origin: window.geometry().loc,
+                popup: true,
+                clip: None,
+            })
+        });
+        let windows = self
+            .order
             .iter()
             .rev()
             .filter_map(|id| Some((*id, self.managed.get(id)?)))
             .filter_map(|(id, entry)| Some((id, entry, entry.rect?)))
-            .flat_map(|(id, entry, rect)| {
-                let origin = Point::from((rect.x(), rect.y()));
-                // The rectangle is for the window proper; a client that draws a shadow or
-                // a title bar around it declares where the window starts inside its surface.
-                let surface_origin = origin - geometry_origin(&entry.toplevel);
-                let root = entry.toplevel.wl_surface();
-                let mut layers: Vec<Layer> = PopupManager::popups_for_surface(root)
-                    .map(|(popup, location)| Layer {
-                        id,
-                        surface: popup.wl_surface().clone(),
-                        origin: origin + location - popup.geometry().loc,
-                        popup: true,
-                        clip: None,
-                    })
-                    .collect();
-                layers.reverse();
-                layers.push(Layer {
-                    id,
-                    surface: root.clone(),
-                    origin: surface_origin,
-                    popup: false,
-                    clip: Some(placed_area(rect)),
-                });
-                layers
-            })
-            .collect()
+            .flat_map(|(id, entry, rect)| window_layers(id, entry, rect));
+        menus.chain(windows).collect()
     }
+}
+
+/// The layers of one placed window, front to back.
+fn window_layers(id: WinId, entry: &Entry, rect: Rect) -> Vec<Layer> {
+    let Some(root) = entry.shell.wl_surface() else {
+        return Vec::new();
+    };
+    let origin = Point::from((rect.x(), rect.y()));
+    // The rectangle is for the window proper; a client that draws a shadow or a title bar
+    // around it declares where the window starts inside its surface. An X11 window is
+    // sized to the rectangle and draws nothing around it.
+    let surface_origin = match &entry.shell {
+        Shell::Xdg(toplevel) => origin - geometry_origin(toplevel),
+        Shell::X11(_) => origin,
+    };
+    let mut layers: Vec<Layer> = PopupManager::popups_for_surface(&root)
+        .map(|(popup, location)| Layer {
+            id: Some(id),
+            surface: popup.wl_surface().clone(),
+            origin: origin + location - popup.geometry().loc,
+            popup: true,
+            clip: None,
+        })
+        .collect();
+    layers.reverse();
+    layers.push(Layer {
+        id: Some(id),
+        surface: root,
+        origin: surface_origin,
+        popup: false,
+        clip: Some(placed_area(rect)),
+    });
+    layers
 }
 
 /// The area the core gave a window, which is all its client may paint on. A size beyond

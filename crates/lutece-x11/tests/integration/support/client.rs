@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
 use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt, CreateWindowAux, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MapState,
-    PropMode, Window, WindowClass,
+    AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt, CreateWindowAux,
+    KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState, PropMode, Window,
+    WindowClass,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -242,6 +243,36 @@ impl Client {
         self.round_trip();
     }
 
+    /// Drags the pointer from `from` to `to` with `button` and `modifiers` held, like a
+    /// mouse would: the pointer is placed, the keys and the button go down, the pointer
+    /// moves in a few steps, then the button and the keys come up.
+    pub fn drag(&self, modifiers: &[u32], button: u8, from: (i16, i16), to: (i16, i16)) {
+        const STEPS: i16 = 4;
+        let codes: Vec<u8> = modifiers
+            .iter()
+            .map(|keysym| {
+                self.keycode(*keysym)
+                    .unwrap_or_else(|| panic!("no key produces keysym {keysym:#x}"))
+            })
+            .collect();
+        self.fake_motion(from);
+        for code in &codes {
+            self.fake_key(KEY_PRESS_EVENT, *code);
+        }
+        self.fake_button(BUTTON_PRESS_EVENT, button);
+        for step in 1..=STEPS {
+            self.fake_motion((
+                from.0 + (to.0 - from.0) * step / STEPS,
+                from.1 + (to.1 - from.1) * step / STEPS,
+            ));
+        }
+        self.fake_button(BUTTON_RELEASE_EVENT, button);
+        for code in codes.iter().rev() {
+            self.fake_key(KEY_RELEASE_EVENT, *code);
+        }
+        self.round_trip();
+    }
+
     /// Swaps the keys that produce `a` and `b` on the server, like a layout change would,
     /// so the window manager receives a `MappingNotify`.
     pub fn swap_keys(&mut self, a: u32, b: u32) {
@@ -253,13 +284,15 @@ impl Client {
                 .unwrap_or_else(|| panic!("no key produces keysym {keysym:#x}"))
         };
         let (first, second) = (row(a, self), row(b, self));
-        for (to, from) in [(first, second), (second, first)] {
-            let keysyms = self.keysyms[from * width..(from + 1) * width].to_vec();
+        // Both rows are copied before either is written, or the second copy would read
+        // the first one's new contents and both keys would end up producing the same.
+        let rows = [first, second].map(|row| self.keysyms[row * width..(row + 1) * width].to_vec());
+        for (to, keysyms) in [(first, &rows[1]), (second, &rows[0])] {
             let code = self.first_keycode + u8::try_from(to).expect("keycode fits");
             self.conn
-                .change_keyboard_mapping(1, code, u8::try_from(width).expect("width"), &keysyms)
+                .change_keyboard_mapping(1, code, u8::try_from(width).expect("width"), keysyms)
                 .expect("change_keyboard_mapping");
-            self.keysyms[to * width..(to + 1) * width].copy_from_slice(&keysyms);
+            self.keysyms[to * width..(to + 1) * width].copy_from_slice(keysyms);
         }
         self.round_trip();
     }
@@ -304,6 +337,27 @@ impl Client {
         self.conn
             .xtest_fake_input(kind, code, CURRENT_TIME, self.root, 0, 0, 0)
             .expect("fake key");
+    }
+
+    fn fake_button(&self, kind: u8, button: u8) {
+        self.conn
+            .xtest_fake_input(kind, button, CURRENT_TIME, self.root, 0, 0, 0)
+            .expect("fake button");
+    }
+
+    /// Puts the pointer at `at`, in root coordinates.
+    fn fake_motion(&self, at: (i16, i16)) {
+        self.conn
+            .xtest_fake_input(
+                MOTION_NOTIFY_EVENT,
+                0,
+                CURRENT_TIME,
+                self.root,
+                at.0,
+                at.1,
+                0,
+            )
+            .expect("fake motion");
     }
 
     /// Returns once the server has handled every request sent so far.

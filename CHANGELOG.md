@@ -98,6 +98,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wayland output enter: a window's surfaces and its popups get `wl_surface.enter` and `leave` for the outputs the window's rectangle overlaps, and `preferred_buffer_scale` with the host scale rounded up, so clients without `wp_fractional_scale` draw sharp; refreshed on place, hide, move, output changes and scale changes
 - Wayland `linux-dmabuf` (version 4 with default feedback): `WaylandBackend::enable_dmabuf` and `DmabufSupport` describe the render GPU and its formats, and `NestedBackend` fills them in from its EGL device, so GPU clients share buffers without copying
 - Integration tests for the new behaviour with a real client (output enters at the seam, on move, hide, unplug and output growth; buffer scale; popups; the dmabuf global, its feedback and buffer creation), and property tests for the overlap rule
+- `lutece-wayland`: X11 programs through Xwayland. `WaylandBackend::enable_xwayland` starts Xwayland and the window manager side it needs (and `NestedBackend::enable_xwayland`), `xwayland_display` says when it is ready, and a spawn effect then sets `DISPLAY` for the program. An X11 window is reported as `Event::WindowOpened` with its title, class and parent dialog, and is tiled, floated, focused and closed like a Wayland one; the X input focus follows the core's focus. X11 menus and tooltips are drawn above all windows where their program put them, take the pointer, and are never managed. A failed start is reported once as `Error::XWayland`
+- The `minimal_wayland` example turns Xwayland on, prints the `DISPLAY` to use, and keeps running without X11 programs if Xwayland cannot start
+- X11 integration tests for mouse drags (Super+left-drag moves, Super+right-drag resizes, a drag without the modifier does nothing) and a pointer-drag helper in the test client
+- Wayland integration tests with a real Xwayland and an X11 client: a window is reported with its title and class, placed, shares the screen with a second one, closes, a menu stays unmanaged and in front, and the focused window gets the X input focus; unit tests for how a configure request is granted
 
 ### Changed
 - `Engine::scene` now builds the scene for every screen, each in its own output's area, instead of one workspace on the first output; its focus is the focused screen's focused window
@@ -111,3 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A popup whose window moves is dismissed when its positioner rules would now put it elsewhere (a menu slid back from an edge, or one that would leave the output); other popups follow their window
 - The Wayland compositor global is now version 6, which is what lets a surface be told its preferred buffer scale
 - `lutece-wayland` enables Smithay's `backend_drm` feature (the `drm` crates) to identify the render node for dmabuf feedback
+- The `lutece-wayland` example is now named `minimal_wayland` (it was `minimal`, like the X11 example, and building one overwrote the other's binary in `target/<profile>/examples`); run it with `cargo run -p lutece-wayland --example minimal_wayland`
+- `lutece-wayland` enables Smithay's `xwayland` feature and has `x11rb` as a test dependency
+
+### Fixed
+- The X11 integration tests started the Wayland example instead of the X11 one after both had been built, and then every test timed out waiting for the window manager
+- The X11 test helper that swaps two keys copied the first key's symbols over the second's, so the keyboard remap test could not find the key it had just remapped
