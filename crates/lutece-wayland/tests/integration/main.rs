@@ -2,9 +2,11 @@
 
 mod clipboard;
 mod decoration;
+mod dmabuf;
 mod outputs;
 mod pointer;
 mod popup;
+mod presence;
 mod protocol;
 mod scale;
 mod support;

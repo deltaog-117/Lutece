@@ -34,6 +34,8 @@
 | 2026-11-02 | Pointer drags | One core event, `FloatAdjusted`, for pointer drags; focus stays in the backend | ✅ Confirmed |
 | 2026-11-02 | Wayland outputs | A set of outputs on the backend; the nested window is cut into virtual monitors | ✅ Confirmed |
 | 2026-11-02 | Wayland host scale | Fractional scale in 120ths: logical core, `wp_fractional_scale` and `wp_viewporter` for clients | ✅ Confirmed |
+| 2026-11-02 | Wayland output enter | Worked out from window and output rectangles, not from the render pass | ✅ Confirmed |
+| 2026-11-02 | Wayland dmabuf | `linux-dmabuf` v4 with the render GPU named, fed by the host that owns the renderer | ✅ Confirmed |
 
 ---
 
@@ -1114,6 +1116,48 @@ The roadmap item says to follow the host's scale, and only B does so at every fa
 - **Tests:** unit and property tests for the scale; protocol tests with a real client for the preferred scale (at binding and after a change), the output's scale and physical mode, the viewport, and popup dismissal. The crop and the drawing at a scale cannot be tested without a GPU.
 - **Not verified:** none of the drawing has been seen on screen: the crop of a real shadow, text sharpness at 1.5 and the pointer position on a scaled host.
 - **Not done:** `wl_surface.enter` for clients without fractional scale; moving a popup when its window moves (not possible); `linux-dmabuf`.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Wayland output enter and dmabuf: the GPU named, the overlap worked out from rectangles
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+Two roadmap items done together. Clients that do not bind `wp_fractional_scale` read `wl_output.scale`, but only for outputs their surface has entered, and the compositor sent no enter, so they drew at 1 and were enlarged. Separately, GPU clients fell back to shared memory because there was no `linux-dmabuf`. The enter had one credible approach; the dmabuf had a choice.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Formats only (dmabuf v3) | No new dependency, smallest change | No GPU hint, so two-GPU machines may misbehave | S |
+| B. Formats and render GPU (dmabuf v4) | Correct on hybrid GPUs; the DRM backend will need the same | Adds the `drm` crates | M |
+
+#### Decision & Rationale
+
+**Chosen Option:** B for the dmabuf. Correctness ranked first and only B is right with two GPUs; the `drm` crates are small bindings with no new system library, and the planned DRM session backend must identify its GPU the same way. A's only win was effort.
+
+For the enter, the render-pass helper in Smithay was rejected: it needs the renderer, so it could not be tested headlessly and would tie the protocol side to drawing. The core already gives each window's rectangle and the backend knows each output's, so overlap is a pure function.
+
+#### Implementation Notes
+
+- **Overlap rule:** two rectangles overlap when they share at least one pixel, so touching edges do not. It is computed in 64 bits so a rectangle at the edge of `i32` cannot overflow, and property-tested for symmetry, containment and gaps.
+- **When it runs:** `refresh_presence` is idempotent (Smithay's enter and leave ignore repeats), so it is called on place, hide, new popup, new subsurface, output set changes and scale changes. Not on every commit, so the per-frame path is unchanged. An output that is unplugged is left first, before its global goes.
+- **Which surfaces:** the window's surface tree and its popups' trees share the window's outputs; a popup reaching past its window is not worked out separately, which is fine because every output shares one scale.
+- **Buffer scale:** `preferred_buffer_scale` is the host scale rounded up, equal to what `wl_output` says. It needs compositor version 6, which was 5; version 6 adds only these events.
+- **dmabuf split:** the backend owns no renderer, so `enable_dmabuf` takes a `DmabufSupport` (device number and `(fourcc, modifier)` pairs, no Smithay types in the public interface). The nested backend builds it from its EGL device and render node. With software rendering there is no node, and no global is offered.
+- **No GPU import test:** the renderer sits in the host window layer, out of reach while a request is served, and `create_immed` needs an answer at once, so a queue answered later is not possible. Smithay refuses a format that was not offered (a protocol error that ends the client); a buffer the driver still rejects is skipped when drawn.
+- **Tests:** protocol tests with a real client for enters at the seam, on move, hide, unplug and output growth, for buffer scale and a later change, for popups, and for the dmabuf global, its feedback (device and table size) and buffer creation, using a synthetic format list since no GPU is involved.
+- **Not verified:** a real GPU client in the nested window; that the EGL device gives a render node on this machine; text sharpness of a GTK 3 client at 1.5.
+- **Not done:** per-surface dmabuf feedback for scan-out (belongs with the DRM backend); the legacy `wl_drm` path.
 
 #### Review / Update Log
 

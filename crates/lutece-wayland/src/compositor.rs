@@ -4,6 +4,7 @@
 //! Nothing here draws. A toplevel is announced to the core on its first commit, and
 //! every later size or focus decision arrives from the core as a scene.
 
+use crate::dmabuf::Dmabufs;
 use crate::pointer::PointerState;
 use crate::scale::Scale;
 use crate::translate;
@@ -14,6 +15,7 @@ use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::desktop::{PopupKind, PopupManager};
 use smithay::input::keyboard::FilterResult;
 use smithay::input::pointer::CursorImageStatus;
+use smithay::output::Output as WlOutput;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -62,6 +64,9 @@ pub(crate) struct State {
     pub(crate) windows: Windows,
     /// The area of each output, to keep popups on one.
     pub(crate) screens: Vec<Rect>,
+    /// The same outputs as clients see them, to tell surfaces which they are on.
+    pub(crate) wl_outputs: Vec<(Rect, WlOutput)>,
+    pub(crate) dmabufs: Dmabufs,
     /// How finely clients are told to draw.
     pub(crate) scale: Scale,
     pub(crate) popups: PopupManager,
@@ -102,7 +107,8 @@ impl State {
         let _ = ViewporterState::new::<Self>(display);
         Ok(Self {
             display: display.clone(),
-            compositor: CompositorState::new::<Self>(display),
+            // Version 6 is what lets a surface be told its preferred buffer scale.
+            compositor: CompositorState::new_v6::<Self>(display),
             xdg_shell: XdgShellState::new::<Self>(display),
             shm: ShmState::new::<Self>(display, []),
             data_device: DataDeviceState::new::<Self>(display),
@@ -111,6 +117,8 @@ impl State {
             seat,
             windows: Windows::default(),
             screens: Vec::new(),
+            wl_outputs: Vec::new(),
+            dmabufs: Dmabufs::new(),
             scale: Scale::ONE,
             popups: PopupManager::default(),
             pointer: PointerState::new(),
@@ -241,6 +249,11 @@ impl CompositorHandler for State {
         self.complete_popup_handshake(surface);
         self.announce(surface);
     }
+
+    fn new_subsurface(&mut self, _surface: &WlSurface, parent: &WlSurface) {
+        // A subsurface is on the outputs its window is on from the start.
+        self.refresh_presence_of(parent);
+    }
 }
 
 impl XdgShellHandler for State {
@@ -264,7 +277,8 @@ impl XdgShellHandler for State {
         surface.with_pending_state(|state| state.geometry = geometry);
         // A popup whose parent is already gone cannot be shown, and the client is told so
         // when the surface dies, so there is nothing to do with the error.
-        let _ = self.popups.track_popup(PopupKind::Xdg(surface));
+        let _ = self.popups.track_popup(PopupKind::Xdg(surface.clone()));
+        self.refresh_presence_of(surface.wl_surface());
     }
 
     fn reposition_request(

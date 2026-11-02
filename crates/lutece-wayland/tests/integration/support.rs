@@ -30,6 +30,13 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
 };
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{
+    self, Flags as DmabufFlags, ZwpLinuxBufferParamsV1,
+};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_feedback_v1::{
+    self, ZwpLinuxDmabufFeedbackV1,
+};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
@@ -59,6 +66,9 @@ pub struct Window {
     pub decoration_mode: Option<Mode>,
     /// The scale the compositor last preferred for the window, in 120ths, if it said.
     pub preferred_scale: Option<u32>,
+    /// The integer scale the compositor last preferred for the surface, if it said.
+    pub buffer_scale: Option<i32>,
+    entered: Vec<WlOutput>,
     xdg: Option<XdgSurface>,
     toplevel: Option<XdgToplevel>,
     surface: Option<WlSurface>,
@@ -73,6 +83,7 @@ pub struct Popup {
     /// Each configure as `(x, y, width, height)`.
     pub configures: Vec<(i32, i32, i32, i32)>,
     pub done: bool,
+    entered: Vec<WlOutput>,
     surface: WlSurface,
     _xdg: XdgSurface,
     _popup: XdgPopup,
@@ -98,6 +109,15 @@ struct Observed {
     output_mode: Option<(i32, i32)>,
     /// The registry names of the `wl_output` globals that are currently offered.
     output_globals: Vec<u32>,
+    /// Every `wl_output` bound, with the x its geometry put it at.
+    outputs: Vec<(WlOutput, i32)>,
+    dmabuf: Option<ZwpLinuxDmabufV1>,
+    dmabuf_feedback: Option<ZwpLinuxDmabufFeedbackV1>,
+    /// The device the default feedback named, and how many formats its table holds.
+    dmabuf_device: Option<Vec<u8>>,
+    dmabuf_table_entries: Option<usize>,
+    /// For each buffer asked for, whether the compositor accepted it.
+    dmabuf_results: Vec<bool>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     data_device: Option<WlDataDevice>,
@@ -248,6 +268,79 @@ impl TestClient {
         self.observed.viewporter.is_some()
     }
 
+    /// The x of every output the window's surface is on, left to right.
+    pub fn outputs_of_window(&self, index: usize) -> Vec<i32> {
+        self.positions(&self.observed.windows[index].entered)
+    }
+
+    /// The x of every output the popup's surface is on, left to right.
+    pub fn outputs_of_popup(&self, slot: usize) -> Vec<i32> {
+        self.positions(&self.observed.popups[slot].entered)
+    }
+
+    fn positions(&self, entered: &[WlOutput]) -> Vec<i32> {
+        let mut xs: Vec<i32> = entered
+            .iter()
+            .filter_map(|entered| {
+                self.observed
+                    .outputs
+                    .iter()
+                    .find(|(bound, _)| bound == entered)
+                    .map(|(_, x)| *x)
+            })
+            .collect();
+        xs.sort_unstable();
+        xs
+    }
+
+    /// Whether the compositor offers `zwp_linux_dmabuf_v1`.
+    pub fn has_dmabuf(&self) -> bool {
+        self.observed.dmabuf.is_some()
+    }
+
+    /// Asks for the default dmabuf feedback, which names the GPU and the formats.
+    pub fn request_dmabuf_feedback(&mut self) {
+        let qh = self.queue.handle();
+        let dmabuf = self.observed.dmabuf.as_ref().expect("dmabuf bound");
+        self.observed.dmabuf_feedback = Some(dmabuf.get_default_feedback(&qh, ()));
+    }
+
+    /// The device number the feedback named, as the bytes the protocol sends.
+    pub fn dmabuf_device(&self) -> Option<&[u8]> {
+        self.observed.dmabuf_device.as_deref()
+    }
+
+    /// How many formats the feedback's table holds.
+    pub fn dmabuf_table_entries(&self) -> Option<usize> {
+        self.observed.dmabuf_table_entries
+    }
+
+    /// Offers a one-plane dmabuf of `width` x `height` in `fourcc` and `modifier`. The
+    /// memory behind it is an ordinary file, which is all the protocol layer looks at.
+    pub fn offer_dmabuf(&mut self, width: i32, height: i32, fourcc: u32, modifier: u64) {
+        let qh = self.queue.handle();
+        let dmabuf = self.observed.dmabuf.as_ref().expect("dmabuf bound");
+        let stride = width * 4;
+        let file = tempfile::tempfile().expect("an anonymous file");
+        file.set_len(u64::try_from(stride * height).expect("a positive size"))
+            .expect("a sized file");
+        let params = dmabuf.create_params(&qh, ());
+        params.add(
+            file.as_fd(),
+            0,
+            0,
+            u32::try_from(stride).expect("a positive stride"),
+            u32::try_from(modifier >> 32).expect("the high half"),
+            u32::try_from(modifier & 0xFFFF_FFFF).expect("the low half"),
+        );
+        params.create(width, height, fourcc, DmabufFlags::empty());
+    }
+
+    /// For each dmabuf offered so far, whether the compositor accepted it.
+    pub fn dmabuf_results(&self) -> &[bool] {
+        &self.observed.dmabuf_results
+    }
+
     /// The integer scale the first output announced.
     pub fn output_scale(&self) -> Option<i32> {
         self.observed.output_scale
@@ -319,6 +412,7 @@ impl TestClient {
         self.observed.popups.push(Popup {
             configures: Vec::new(),
             done: false,
+            entered: Vec::new(),
             surface,
             _xdg: xdg,
             _popup: popup,
@@ -497,7 +591,7 @@ impl Dispatch<WlRegistry, ()> for Observed {
         };
         match interface.as_str() {
             "wl_compositor" => {
-                state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
+                state.compositor = Some(registry.bind(name, version.min(6), qh, ()));
             }
             "xdg_wm_base" => state.wm_base = Some(registry.bind(name, version.min(2), qh, ())),
             "wl_seat" => state.seat = Some(registry.bind(name, version.min(5), qh, ())),
@@ -512,9 +606,14 @@ impl Dispatch<WlRegistry, ()> for Observed {
                 state.fractional_manager = Some(registry.bind(name, 1, qh, ()));
             }
             "wp_viewporter" => state.viewporter = Some(registry.bind(name, 1, qh, ())),
+            "zwp_linux_dmabuf_v1" => {
+                state.dmabuf = Some(registry.bind(name, version.min(4), qh, ()));
+            }
             "wl_output" => {
+                let output: WlOutput = registry.bind(name, version.min(3), qh, ());
+                state.outputs.push((output.clone(), 0));
                 if state.output.is_none() {
-                    state.output = Some(registry.bind(name, version.min(3), qh, ()));
+                    state.output = Some(output);
                 }
                 state.output_globals.push(name);
             }
@@ -779,7 +878,6 @@ impl Dispatch<WlBuffer, ()> for Observed {
 }
 
 delegate_noop!(Observed: ignore WlCompositor);
-delegate_noop!(Observed: ignore WlSurface);
 delegate_noop!(Observed: ignore WlShm);
 delegate_noop!(Observed: ignore WlShmPool);
 delegate_noop!(Observed: ignore WlDataDeviceManager);
@@ -792,13 +890,18 @@ delegate_noop!(Observed: ignore WpViewport);
 impl Dispatch<WlOutput, ()> for Observed {
     fn event(
         state: &mut Self,
-        _: &WlOutput,
+        output: &WlOutput,
         event: wl_output::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         match event {
+            wl_output::Event::Geometry { x, .. } => {
+                if let Some(known) = state.outputs.iter_mut().find(|(bound, _)| bound == output) {
+                    known.1 = x;
+                }
+            }
             wl_output::Event::Scale { factor } => state.output_scale = Some(factor),
             wl_output::Event::Mode {
                 flags: WEnum::Value(flags),
@@ -850,4 +953,100 @@ pub fn drive(engine: &mut Engine, backend: &mut WaylandBackend, events: Vec<Even
         .apply_scene(&engine.scene().expect("a valid scene"))
         .expect("scene applies");
     opened
+}
+
+impl Dispatch<WlSurface, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        surface: &WlSurface,
+        event: wayland_client::protocol::wl_surface::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wayland_client::protocol::wl_surface::Event;
+        let entered = match state
+            .windows
+            .iter_mut()
+            .find(|window| window.surface.as_ref() == Some(surface))
+        {
+            Some(window) => {
+                if let Event::PreferredBufferScale { factor } = event {
+                    window.buffer_scale = Some(factor);
+                }
+                &mut window.entered
+            }
+            None => match state
+                .popups
+                .iter_mut()
+                .find(|popup| &popup.surface == surface)
+            {
+                Some(popup) => &mut popup.entered,
+                None => return,
+            },
+        };
+        match event {
+            Event::Enter { output } => entered.push(output),
+            Event::Leave { output } => entered.retain(|known| known != &output),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpLinuxDmabufV1, ()> for Observed {
+    fn event(
+        _: &mut Self,
+        _: &ZwpLinuxDmabufV1,
+        _: wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                state.dmabuf_device = Some(device);
+            }
+            // Each table entry is a format (4 bytes), padding (4) and a modifier (8).
+            zwp_linux_dmabuf_feedback_v1::Event::FormatTable { size, .. } => {
+                state.dmabuf_table_entries = Some(size as usize / 16);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpLinuxBufferParamsV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &ZwpLinuxBufferParamsV1,
+        event: zwp_linux_buffer_params_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_buffer_params_v1::Event::Created { buffer } => {
+                state.dmabuf_results.push(true);
+                state.buffers.push(buffer);
+            }
+            zwp_linux_buffer_params_v1::Event::Failed => state.dmabuf_results.push(false),
+            _ => {}
+        }
+    }
+
+    event_created_child!(Observed, ZwpLinuxBufferParamsV1, [
+        zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (WlBuffer, ()),
+    ]);
 }

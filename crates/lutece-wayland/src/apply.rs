@@ -27,6 +27,7 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
                 if let Some(entry) = state.windows.get_mut(*id) {
                     entry.rect = None;
                 }
+                state.refresh_presence(*id);
             }
             Change::Show(placement) | Change::Move(placement) => place(state, placement),
             Change::Restack(order) => state.windows.restack(order),
@@ -52,6 +53,7 @@ fn place(state: &mut State, placement: &Placement) {
         .with_pending_state(|pending| pending.size = Some(size.into()));
     entry.toplevel.send_pending_configure();
     state.dismiss_misplaced_popups(placement.id);
+    state.refresh_presence(placement.id);
 }
 
 /// Protocol sizes are signed; a size beyond `i32` is clamped, far past any real screen.

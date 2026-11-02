@@ -3,6 +3,7 @@
 
 use crate::apply::{Flow, apply_changes, apply_effects};
 use crate::compositor::{ClientState, State};
+use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
 use crate::render::SceneElement;
 use crate::scale::Scale;
@@ -135,6 +136,22 @@ impl WaylandBackend {
         for screen in &self.screens {
             show_area(&screen.output, screen.rect, scale);
         }
+        self.state.refresh_all_presence();
+    }
+
+    /// Offers clients GPU buffers (`linux-dmabuf`) on the GPU `support` describes, which
+    /// is the one the host draws with. A client that draws with the GPU then hands its
+    /// frames over without copying them. Calling it again replaces the offer.
+    ///
+    /// A buffer is accepted when its format was offered; whether the driver can use it is
+    /// only known when it is drawn, and one it rejects is left out of the frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the list of formats cannot be shared with clients.
+    pub fn enable_dmabuf(&mut self, support: &DmabufSupport) -> Result<()> {
+        self.state.enable_dmabuf(support)?;
+        Ok(())
     }
 
     /// Makes `outputs` the complete set of outputs. One whose id is new appears to
@@ -143,13 +160,16 @@ impl WaylandBackend {
     /// [`next_events`](Self::next_events). The ids must differ from each other.
     pub fn set_outputs(&mut self, outputs: &[Output]) {
         let handle = self.display.handle();
+        let mut gone = Vec::new();
         self.screens.retain(|screen| {
             let kept = outputs.iter().any(|output| output.id == screen.id);
             if !kept {
                 handle.remove_global::<State>(screen.global.clone());
+                gone.push(screen.output.clone());
             }
             kept
         });
+        self.state.leave_outputs(&gone);
         let scale = self.state.scale;
         for output in outputs {
             match self
@@ -182,6 +202,14 @@ impl WaylandBackend {
                 }
             }
         }
+        self.state.wl_outputs = outputs
+            .iter()
+            .filter_map(|output| {
+                let screen = self.screens.iter().find(|screen| screen.id == output.id)?;
+                Some((output.rect, screen.output.clone()))
+            })
+            .collect();
+        self.state.refresh_all_presence();
         self.state.report_outputs(outputs.to_vec());
     }
 

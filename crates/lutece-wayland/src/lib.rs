@@ -25,10 +25,12 @@
 mod apply;
 mod backend;
 mod compositor;
+mod dmabuf;
 mod error;
 mod nested;
 mod pointer;
 mod popup;
+mod presence;
 mod render;
 mod scale;
 mod selection;
@@ -37,6 +39,7 @@ mod windows;
 
 pub use apply::Flow;
 pub use backend::{ButtonAction, KeyAction, WaylandBackend};
+pub use dmabuf::DmabufSupport;
 pub use error::{Error, Result};
 pub use nested::NestedBackend;
 pub use scale::Scale;

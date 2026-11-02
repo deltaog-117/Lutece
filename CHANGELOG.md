@@ -95,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NestedBackend` follows the scale factor of the host window, and its changes, and measures outputs and the pointer in logical pixels
 - The Wayland backend cuts each window's surface to the rectangle the core gave the window, so a client's shadow or frame does not paint over a neighbouring window
 - Property tests for the scale (a length survives a trip to physical and back at any scale of 1 or more; touching rectangles still touch) and protocol tests with a real client for the scale, the output and the viewport
+- Wayland output enter: a window's surfaces and its popups get `wl_surface.enter` and `leave` for the outputs the window's rectangle overlaps, and `preferred_buffer_scale` with the host scale rounded up, so clients without `wp_fractional_scale` draw sharp; refreshed on place, hide, move, output changes and scale changes
+- Wayland `linux-dmabuf` (version 4 with default feedback): `WaylandBackend::enable_dmabuf` and `DmabufSupport` describe the render GPU and its formats, and `NestedBackend` fills them in from its EGL device, so GPU clients share buffers without copying
+- Integration tests for the new behaviour with a real client (output enters at the seam, on move, hide, unplug and output growth; buffer scale; popups; the dmabuf global, its feedback and buffer creation), and property tests for the overlap rule
 
 ### Changed
 - `Engine::scene` now builds the scene for every screen, each in its own output's area, instead of one workspace on the first output; its focus is the focused screen's focused window
@@ -106,3 +109,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WaylandBackend::set_output_size` is now the one-output form of `set_outputs`: it removes any other output
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside
 - A popup whose window moves is dismissed when its positioner rules would now put it elsewhere (a menu slid back from an edge, or one that would leave the output); other popups follow their window
+- The Wayland compositor global is now version 6, which is what lets a surface be told its preferred buffer scale
+- `lutece-wayland` enables Smithay's `backend_drm` feature (the `drm` crates) to identify the render node for dmabuf feedback

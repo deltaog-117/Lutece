@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 lutece = { path = "../lutece" }
 rustix = { version = "1", features = ["event"] }
-smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "renderer_gl", "wayland_frontend", "desktop"] }
+smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "backend_drm", "renderer_gl", "wayland_frontend", "desktop"] }
 thiserror = "2"
 
 [dev-dependencies]

@@ -6,16 +6,18 @@
 
 use crate::apply::Flow;
 use crate::backend::{ButtonAction, KeyAction, WaylandBackend};
+use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
 use crate::scale::Scale;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
+use smithay::backend::egl::EGLDevice;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, ButtonState, Event as _, InputEvent, KeyState, KeyboardKeyEvent,
     PointerAxisEvent, PointerButtonEvent,
 };
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
-use smithay::backend::renderer::{Color32F, Frame, Renderer};
+use smithay::backend::renderer::{Color32F, Frame, ImportDma, Renderer};
 use smithay::backend::winit::{self, WinitEvent, WinitEventLoop, WinitGraphicsBackend};
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
@@ -102,12 +104,15 @@ impl NestedBackend {
     /// Returns an error if the window cannot be opened (no graphics session, no OpenGL)
     /// or the compositor cannot start.
     pub fn open_with_outputs(outputs: NonZeroU32) -> Result<Self> {
-        let (graphics, window) = winit::init::<GlesRenderer>()?;
+        let (mut graphics, window) = winit::init::<GlesRenderer>()?;
         let scale = Scale::from_factor(graphics.scale_factor()).unwrap_or_default();
         let size = size_of(graphics.window_size(), scale)?;
         let mut wayland = WaylandBackend::bind(size)?;
         wayland.set_scale(scale);
         wayland.set_outputs(&split(size, outputs));
+        if let Some(support) = dmabuf_support(graphics.renderer()) {
+            wayland.enable_dmabuf(&support)?;
+        }
         Ok(Self {
             wayland,
             graphics,
@@ -326,6 +331,18 @@ fn collect(
         }
         _ => return None,
     })
+}
+
+/// The GPU the renderer draws with, as clients need to know it. `None` when it draws in
+/// software or its device cannot be found, in which case clients keep using shared memory.
+fn dmabuf_support(renderer: &GlesRenderer) -> Option<DmabufSupport> {
+    let device = EGLDevice::device_for_display(renderer.egl_context().display()).ok()?;
+    let node = device.try_get_render_node().ok()??;
+    let offered = renderer.dmabuf_formats();
+    let formats = offered
+        .iter()
+        .map(|format| (format.code as u32, u64::from(format.modifier)));
+    Some(DmabufSupport::new(node.dev_id(), formats))
 }
 
 fn render_error(error: impl Display) -> Error {
