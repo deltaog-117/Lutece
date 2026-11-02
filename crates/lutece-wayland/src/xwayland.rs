@@ -12,16 +12,19 @@
 //! only loop that blocks.
 
 use crate::compositor::State;
+use crate::focus::Focus;
 use lutece::{Event, WinId, WindowInfo};
 use smithay::delegate_xwayland_shell;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Rectangle};
+use smithay::wayland::selection::SelectionTarget;
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, XwmId};
 use smithay::xwayland::{X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler};
 use std::io;
+use std::os::fd::OwnedFd;
 use std::process::Stdio;
 
 /// Starts Xwayland on `display` and, once it is ready, the window manager for it. The
@@ -168,6 +171,36 @@ impl XwmHandler for State {
     }
 
     fn move_request(&mut self, _xwm: XwmId, _window: X11Surface, _button: u32) {}
+
+    // An X11 program may read what Wayland clients copied only while an X11 window has
+    // the keyboard focus, the way a Wayland client may only while one of its surfaces
+    // does. Without this, any background X11 program could read the clipboard at will.
+    fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
+        self.seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus())
+            .is_some_and(|focus| {
+                matches!(focus, Focus::X11(window) if window.xwm_id() == Some(xwm))
+            })
+    }
+
+    fn send_selection(
+        &mut self,
+        _xwm: XwmId,
+        selection: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+    ) {
+        self.send_wayland_selection(selection, mime_type, fd);
+    }
+
+    fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        self.offer_x11_selection(selection, mime_types);
+    }
+
+    fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
+        self.withdraw_x11_selection(selection);
+    }
 
     fn disconnected(&mut self, _xwm: XwmId) {
         self.xwm = None;

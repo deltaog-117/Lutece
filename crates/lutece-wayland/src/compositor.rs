@@ -20,6 +20,7 @@ use smithay::output::Output as WlOutput;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
 use smithay::reexports::wayland_server::{
     Client, DisplayHandle,
@@ -57,6 +58,8 @@ const REPEAT_DELAY: i32 = 600;
 /// Everything the protocol handlers read and change.
 pub(crate) struct State {
     pub(crate) display: DisplayHandle,
+    /// The loop that runs Xwayland, for the transfers its window manager starts.
+    pub(crate) loop_handle: LoopHandle<'static, Self>,
     compositor: CompositorState,
     xdg_shell: XdgShellState,
     shm: ShmState,
@@ -103,7 +106,10 @@ impl ClientData for ClientState {
 
 impl State {
     /// Creates the protocol globals on `display`.
-    pub(crate) fn new(display: &DisplayHandle) -> Result<Self, smithay::input::keyboard::Error> {
+    pub(crate) fn new(
+        display: &DisplayHandle,
+        loop_handle: LoopHandle<'static, Self>,
+    ) -> Result<Self, smithay::input::keyboard::Error> {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(display, SEAT_NAME);
         seat.add_keyboard(Default::default(), REPEAT_DELAY, REPEAT_RATE)?;
@@ -118,6 +124,7 @@ impl State {
         let _ = ViewporterState::new::<Self>(display);
         Ok(Self {
             display: display.clone(),
+            loop_handle,
             // Version 6 is what lets a surface be told its preferred buffer scale.
             compositor: CompositorState::new_v6::<Self>(display),
             xdg_shell: XdgShellState::new::<Self>(display),

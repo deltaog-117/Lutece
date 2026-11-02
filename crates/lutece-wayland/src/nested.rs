@@ -5,19 +5,15 @@
 //! outputs, laid side by side in the one window.
 
 use crate::apply::Flow;
-use crate::backend::{ButtonAction, KeyAction, WaylandBackend};
+use crate::backend::WaylandBackend;
 use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
+use crate::input;
 use crate::scale::Scale;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
-use smithay::backend::egl::EGLDevice;
-use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, ButtonState, Event as _, InputEvent, KeyState, KeyboardKeyEvent,
-    PointerAxisEvent, PointerButtonEvent,
-};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
-use smithay::backend::renderer::{Color32F, Frame, ImportDma, Renderer};
+use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::backend::winit::{self, WinitEvent, WinitEventLoop, WinitGraphicsBackend};
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
@@ -50,36 +46,6 @@ pub struct NestedBackend {
     shown_cursor: Option<CursorImageStatus>,
 }
 
-/// Something the window's input devices did, collected while the window system is
-/// pumped and applied afterwards.
-enum Input {
-    Key {
-        code: u32,
-        state: KeyState,
-        time: u32,
-    },
-    Motion {
-        x: f64,
-        y: f64,
-        time: u32,
-    },
-    Button {
-        code: u32,
-        state: ButtonState,
-        time: u32,
-    },
-    Axis {
-        horizontal: f64,
-        vertical: f64,
-        time: u32,
-    },
-}
-
-/// How far one wheel notch scrolls, in the units clients expect, when the window
-/// system reports only whole notches.
-const PIXELS_PER_NOTCH: f64 = 15.0;
-const V120_PER_NOTCH: f64 = 120.0;
-
 impl NestedBackend {
     /// Opens the window and starts listening for clients. The output is as large as the
     /// window and follows it when it is resized. It is measured in logical pixels: the
@@ -110,7 +76,7 @@ impl NestedBackend {
         let mut wayland = WaylandBackend::bind(size)?;
         wayland.set_scale(scale);
         wayland.set_outputs(&split(size, outputs));
-        if let Some(support) = dmabuf_support(graphics.renderer()) {
+        if let Some(support) = DmabufSupport::of(graphics.renderer()) {
             wayland.enable_dmabuf(&support)?;
         }
         Ok(Self {
@@ -182,7 +148,7 @@ impl NestedBackend {
         let status = self.window.dispatch_new_events(|event| match event {
             WinitEvent::Resized { size, scale_factor } => resized = Some((size, scale_factor)),
             WinitEvent::CloseRequested => closed = true,
-            WinitEvent::Input(input) => inputs.extend(collect(input, width, height)),
+            WinitEvent::Input(input) => inputs.extend(input::collect(input, width, height)),
             _ => {}
         });
         self.closed |= closed || matches!(status, PumpStatus::Exit(_));
@@ -195,35 +161,11 @@ impl NestedBackend {
                 .set_outputs(&split(size_of(size, self.scale)?, self.outputs));
         }
 
-        let mut events = Vec::new();
-        for input in inputs {
-            match input {
-                Input::Key { code, state, time } => {
-                    let action = match state {
-                        KeyState::Pressed => KeyAction::Press,
-                        KeyState::Released => KeyAction::Release,
-                    };
-                    if let Some(press) = self.wayland.key_event(code, action, time) {
-                        events.push(Event::KeyPressed(press));
-                    }
-                }
-                Input::Motion { x, y, time } => self.wayland.pointer_motion(x, y, time),
-                Input::Button { code, state, time } => {
-                    let action = match state {
-                        ButtonState::Pressed => ButtonAction::Press,
-                        ButtonState::Released => ButtonAction::Release,
-                    };
-                    self.wayland.pointer_button(code, action, time);
-                }
-                Input::Axis {
-                    horizontal,
-                    vertical,
-                    time,
-                } => {
-                    self.wayland.pointer_axis(horizontal, vertical, time);
-                }
-            }
-        }
+        let bounds = (f64::from(width), f64::from(height));
+        let mut events: Vec<Event> = inputs
+            .into_iter()
+            .filter_map(|input| input::apply(&mut self.wayland, input, bounds))
+            .collect();
         events.extend(self.wayland.next_events(timeout.min(WAIT_SLICE))?);
         Ok(events)
     }
@@ -303,61 +245,6 @@ impl NestedBackend {
         }
         self.shown_cursor = Some(wanted);
     }
-}
-
-/// Picks out the keyboard and pointer events the compositor handles.
-fn collect(
-    input: InputEvent<smithay::backend::winit::WinitInput>,
-    width: i32,
-    height: i32,
-) -> Option<Input> {
-    Some(match input {
-        InputEvent::Keyboard { event } => Input::Key {
-            code: event.key_code().raw(),
-            state: event.state(),
-            time: event.time_msec(),
-        },
-        InputEvent::PointerMotionAbsolute { event } => Input::Motion {
-            x: event.x_transformed(width),
-            y: event.y_transformed(height),
-            time: event.time_msec(),
-        },
-        InputEvent::PointerButton { event } => Input::Button {
-            code: event.button_code(),
-            state: event.state(),
-            time: event.time_msec(),
-        },
-        InputEvent::PointerAxis { event } => {
-            let amount = |axis| {
-                event
-                    .amount(axis)
-                    .or_else(|| {
-                        event
-                            .amount_v120(axis)
-                            .map(|v120| v120 / V120_PER_NOTCH * PIXELS_PER_NOTCH)
-                    })
-                    .unwrap_or(0.0)
-            };
-            Input::Axis {
-                horizontal: amount(Axis::Horizontal),
-                vertical: amount(Axis::Vertical),
-                time: event.time_msec(),
-            }
-        }
-        _ => return None,
-    })
-}
-
-/// The GPU the renderer draws with, as clients need to know it. `None` when it draws in
-/// software or its device cannot be found, in which case clients keep using shared memory.
-fn dmabuf_support(renderer: &GlesRenderer) -> Option<DmabufSupport> {
-    let device = EGLDevice::device_for_display(renderer.egl_context().display()).ok()?;
-    let node = device.try_get_render_node().ok()??;
-    let offered = renderer.dmabuf_formats();
-    let formats = offered
-        .iter()
-        .map(|format| (format.code as u32, u64::from(format.modifier)));
-    Some(DmabufSupport::new(node.dev_id(), formats))
 }
 
 fn render_error(error: impl Display) -> Error {

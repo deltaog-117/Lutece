@@ -28,6 +28,7 @@ mod compositor;
 mod dmabuf;
 mod error;
 mod focus;
+mod input;
 mod nested;
 mod pointer;
 mod popup;

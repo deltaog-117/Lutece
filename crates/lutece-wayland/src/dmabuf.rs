@@ -11,6 +11,9 @@
 
 use crate::compositor::State;
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::egl::EGLDevice;
+use smithay::backend::renderer::ImportDma;
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::delegate_dmabuf;
 use smithay::wayland::dmabuf::{
@@ -42,6 +45,18 @@ impl DmabufSupport {
             })
             .collect();
         Self { device, formats }
+    }
+
+    /// Describes the GPU `renderer` draws with. `None` when it draws in software or its
+    /// device cannot be found, in which case clients keep using shared memory.
+    pub(crate) fn of(renderer: &GlesRenderer) -> Option<Self> {
+        let device = EGLDevice::device_for_display(renderer.egl_context().display()).ok()?;
+        let node = device.try_get_render_node().ok()??;
+        let offered = renderer.dmabuf_formats();
+        let formats = offered
+            .iter()
+            .map(|format| (format.code as u32, u64::from(format.modifier)));
+        Some(Self::new(node.dev_id(), formats))
     }
 
     /// The device number of the render node.

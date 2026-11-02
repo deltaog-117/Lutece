@@ -4,15 +4,18 @@
 //! They need the `Xwayland` program. Without it each test prints a notice and passes;
 //! set `LUTECE_REQUIRE_X11=1` (as CI should) to make a missing program a failure.
 
-use crate::support::{backend, engine};
+use crate::support::{TestClient, backend, engine};
 use lutece::{Engine, Event, WinId};
 use lutece_wayland::WaylandBackend;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
+use std::io::Read;
+use std::sync::mpsc;
+use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeGCAux, ConnectionExt, CreateGCAux, CreateWindowAux, Rectangle, Window,
-    WindowClass,
+    AtomEnum, ChangeGCAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, Rectangle,
+    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -77,6 +80,18 @@ impl Fixture {
             seen: waiting.clone(),
             waiting,
         })
+    }
+
+    /// Records events the backend reported while a test stepped it some other way.
+    fn absorb(&mut self, events: Vec<Event>) {
+        self.seen.extend(events.iter().cloned());
+        self.waiting.extend(events);
+    }
+
+    /// Lets `client` and the backend react to each other, and records what the backend says.
+    fn pump(&mut self, client: &mut TestClient) {
+        let events = client.settle(&mut self.backend);
+        self.absorb(events);
     }
 
     /// Steps the backend until the events seen so far satisfy `done`.
@@ -345,4 +360,275 @@ fn the_window_the_core_focuses_gets_the_x11_input_focus() {
         (focus == second).then_some(())
     });
     assert_ne!(first, second);
+}
+
+/// The atoms the selection tests talk in.
+struct Atoms {
+    clipboard: u32,
+    text: u32,
+    targets: u32,
+    /// Where a paste is delivered.
+    property: u32,
+}
+
+impl Fixture {
+    fn atoms(&self) -> Atoms {
+        let atom = |name: &[u8]| {
+            self.x
+                .intern_atom(false, name)
+                .expect("intern_atom")
+                .reply()
+                .expect("an atom")
+                .atom
+        };
+        Atoms {
+            clipboard: atom(b"CLIPBOARD"),
+            text: atom(b"TEXT"),
+            targets: atom(b"TARGETS"),
+            property: atom(b"LUTECE_PASTE"),
+        }
+    }
+
+    /// A Wayland client with a shown window, opened after the windows already there.
+    fn wayland_client(&mut self) -> TestClient {
+        let (mut client, events) = TestClient::connect(&mut self.backend);
+        self.absorb(events);
+        let window = client.open_window("wayland", "Wayland");
+        self.pump(&mut client);
+        client.map_window(window, 100, 100);
+        self.pump(&mut client);
+        client
+    }
+
+    /// Makes the engine focus `id`, and lets the client hear of it.
+    fn focus(&mut self, id: WinId, client: &mut TestClient) {
+        self.waiting.push(Event::FocusRequested(id));
+        self.drive();
+        self.pump(client);
+    }
+
+    /// Answers the requests X11 programs make of the selection `owner` holds, which is
+    /// what a program that copied must do for others to paste.
+    fn serve_selection(&self, atoms: &Atoms, payload: &[u8]) {
+        while let Some(event) = self.x.poll_for_event().expect("X events") {
+            let XEvent::SelectionRequest(request) = event else {
+                continue;
+            };
+            self.answer(atoms, &request, payload);
+        }
+    }
+
+    fn answer(&self, atoms: &Atoms, request: &SelectionRequestEvent, payload: &[u8]) {
+        let mut property = request.property;
+        if request.target == atoms.targets {
+            self.x
+                .change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    request.requestor,
+                    property,
+                    AtomEnum::ATOM,
+                    &[atoms.targets, atoms.text],
+                )
+                .expect("targets");
+        } else if request.target == atoms.text {
+            self.x
+                .change_property8(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    request.requestor,
+                    property,
+                    AtomEnum::STRING,
+                    payload,
+                )
+                .expect("text");
+        } else {
+            property = x11rb::NONE;
+        }
+        let notify = SelectionNotifyEvent {
+            response_type: SELECTION_NOTIFY_EVENT,
+            sequence: 0,
+            time: request.time,
+            requestor: request.requestor,
+            selection: request.selection,
+            target: request.target,
+            property,
+        };
+        self.x
+            .send_event(false, request.requestor, EventMask::NO_EVENT, notify)
+            .expect("send_event");
+        self.x.flush().expect("flush");
+    }
+
+    /// Asks for the clipboard as text and waits for the answer: the property it was put
+    /// in, or `NONE` if the request was refused.
+    fn request_clipboard(
+        &mut self,
+        window: Window,
+        atoms: &Atoms,
+        client: &mut TestClient,
+    ) -> u32 {
+        // Asking before the bridge has taken the selection would be refused by the X server
+        // itself, which says nothing about the access rule under test.
+        self.wait_for("the clipboard to have an owner", |fixture| {
+            fixture.pump(client);
+            let owner = fixture
+                .x
+                .get_selection_owner(atoms.clipboard)
+                .ok()?
+                .reply()
+                .ok()?
+                .owner;
+            (owner != x11rb::NONE).then_some(())
+        });
+        self.x
+            .convert_selection(
+                window,
+                atoms.clipboard,
+                atoms.text,
+                atoms.property,
+                x11rb::CURRENT_TIME,
+            )
+            .expect("convert_selection");
+        self.x.flush().expect("flush");
+        self.wait_for("the answer to the paste", |fixture| {
+            fixture.pump(client);
+            match fixture.x.poll_for_event().expect("X events") {
+                Some(XEvent::SelectionNotify(notify)) => Some(notify.property),
+                _ => None,
+            }
+        })
+    }
+}
+
+#[test]
+fn an_x11_program_can_paste_what_a_wayland_client_copied() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    let window = fixture.open((10, 10), (50, 50), "x11", "X11", false);
+    fixture.wait_for_events("the X11 window", |events| opened(events).len() == 1);
+    let x_id = opened(&fixture.seen)[0].0;
+    let mut client = fixture.wayland_client();
+    fixture.wait_for_events("both windows", |events| opened(events).len() == 2);
+    let atoms = fixture.atoms();
+
+    // The Wayland window is the newest, so it has the focus and may copy.
+    fixture.drive();
+    fixture.pump(&mut client);
+    client.copy(b"from a wayland client");
+    fixture.pump(&mut client);
+    fixture.focus(x_id, &mut client);
+    fixture.wait_for("the X11 window to have the input focus", |fixture| {
+        let focus = fixture.x.get_input_focus().ok()?.reply().ok()?.focus;
+        (focus == window).then_some(())
+    });
+
+    let property = fixture.request_clipboard(window, &atoms, &mut client);
+
+    assert_eq!(property, atoms.property, "the paste was refused");
+    let pasted = fixture
+        .x
+        .get_property(true, window, property, AtomEnum::ANY, 0, 64)
+        .expect("get_property")
+        .reply()
+        .expect("a reply");
+    assert_eq!(pasted.value, b"from a wayland client");
+}
+
+#[test]
+fn an_x11_program_without_focus_cannot_read_the_clipboard() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    let window = fixture.open((10, 10), (50, 50), "x11", "X11", false);
+    fixture.wait_for_events("the X11 window", |events| opened(events).len() == 1);
+    let x_id = opened(&fixture.seen)[0].0;
+    let mut client = fixture.wayland_client();
+    fixture.wait_for_events("both windows", |events| opened(events).len() == 2);
+    let wayland_id = opened(&fixture.seen)[1].0;
+    let atoms = fixture.atoms();
+
+    fixture.drive();
+    fixture.pump(&mut client);
+    client.copy(b"private");
+    fixture.pump(&mut client);
+    // The X11 window has the focus for a moment, which is also what makes Xwayland register
+    // the copied text, and then gives it back: the program is in the background.
+    fixture.focus(x_id, &mut client);
+    fixture.wait_for("the X11 window to have the input focus", |fixture| {
+        let focus = fixture.x.get_input_focus().ok()?.reply().ok()?.focus;
+        (focus == window).then_some(())
+    });
+    fixture.focus(wayland_id, &mut client);
+    fixture.wait_for("the X11 window to lose the input focus", |fixture| {
+        let focus = fixture.x.get_input_focus().ok()?.reply().ok()?.focus;
+        (focus != window).then_some(())
+    });
+
+    let property = fixture.request_clipboard(window, &atoms, &mut client);
+
+    assert_eq!(
+        property,
+        x11rb::NONE,
+        "a background program read the clipboard"
+    );
+}
+
+#[test]
+fn a_wayland_client_can_paste_what_an_x11_program_copied() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    let mut client = fixture.wayland_client();
+    fixture.wait_for_events("the Wayland window", |events| opened(events).len() == 1);
+    let atoms = fixture.atoms();
+    // The program that copies needs no window on the screen, only one to own the selection.
+    let owner = fixture.x.generate_id().expect("window id");
+    fixture
+        .x
+        .create_window(
+            COPY_DEPTH_FROM_PARENT,
+            owner,
+            fixture.root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .expect("create_window");
+    fixture.drive();
+    fixture.pump(&mut client);
+
+    fixture
+        .x
+        .set_selection_owner(owner, atoms.clipboard, x11rb::CURRENT_TIME)
+        .expect("set_selection_owner");
+    fixture.x.flush().expect("flush");
+    fixture.wait_for("the Wayland client to be offered the text", |fixture| {
+        fixture.serve_selection(&atoms, b"from an x11 program");
+        fixture.pump(&mut client);
+        client.offered().map(<[String]>::to_vec)
+    });
+    assert_eq!(
+        client.offered().map(<[String]>::to_vec),
+        Some(vec!["text/plain".to_owned()])
+    );
+
+    let mut reader = client.paste();
+    let (sender, receiver) = mpsc::channel();
+    // The read ends only when the writer is closed, which needs the backend to keep running.
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = reader.read_to_string(&mut text);
+        let _ = sender.send(text);
+    });
+    let pasted = fixture.wait_for("the paste to arrive", |fixture| {
+        fixture.serve_selection(&atoms, b"from an x11 program");
+        fixture.pump(&mut client);
+        receiver.try_recv().ok()
+    });
+    assert_eq!(pasted, "from an x11 program");
 }

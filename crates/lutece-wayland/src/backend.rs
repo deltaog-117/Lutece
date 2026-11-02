@@ -91,14 +91,14 @@ impl WaylandBackend {
     pub fn bind(size: Size) -> Result<Self> {
         let display = Display::<State>::new()?;
         let handle = display.handle();
-        let state = State::new(&handle)?;
+        let event_loop = EventLoop::try_new().map_err(|error| io::Error::other(error.to_string()))?;
+        let state = State::new(&handle, event_loop.handle())?;
         let listener = ListeningSocket::bind_auto(SOCKET_BASE, SOCKET_TRIES)?;
         let mut backend = Self {
             display,
             listener,
             state,
-            event_loop: EventLoop::try_new()
-                .map_err(|error| io::Error::other(error.to_string()))?,
+            event_loop,
             xwayland_enabled: false,
             scene: Scene::empty(),
             screens: Vec::new(),
@@ -137,8 +137,8 @@ impl WaylandBackend {
     /// Programs started by a spawn effect find it through `DISPLAY` once it is up.
     ///
     /// Xwayland takes a moment to start; [`xwayland_display`](Self::xwayland_display)
-    /// tells when it is ready. Calling this again does nothing. Copying between X11 and
-    /// Wayland programs is not supported yet.
+    /// tells when it is ready. Calling this again does nothing. Copy and paste work between
+    /// X11 and Wayland programs, for the clipboard and the primary selection.
     ///
     /// # Errors
     ///
@@ -288,6 +288,12 @@ impl WaylandBackend {
     /// [`next_events`](Self::next_events).
     pub fn pointer_motion(&mut self, x: f64, y: f64, time: u32) {
         self.state.pointer_motion(Point::from((x, y)), time);
+    }
+
+    /// Where the pointer is, in the coordinates of the output.
+    pub(crate) fn pointer_location(&self) -> (f64, f64) {
+        let location = self.state.pointer.location;
+        (location.x, location.y)
     }
 
     /// A pointer button changed. `button` is a Linux input code, `0x110` for the left
