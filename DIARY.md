@@ -37,6 +37,7 @@
 | 2026-11-02 | Wayland output enter | Worked out from window and output rectangles, not from the render pass | ✅ Confirmed |
 | 2026-11-02 | Wayland dmabuf | `linux-dmabuf` v4 with the render GPU named, fed by the host that owns the renderer | ✅ Confirmed |
 | 2026-11-02 | XWayland | Smithay's window manager on a loop kept inside the backend; windows and menus, no clipboard bridge yet | ✅ Confirmed |
+| 2026-11-02 | X11 and Wayland clipboard | Formats cross when set, data on paste; X11 reads only while an X11 window has focus | ✅ Confirmed |
 
 ---
 
@@ -1206,6 +1207,38 @@ X11 programs (Steam, older Java and Electron apps) cannot speak Wayland. Xwaylan
 - **Drag tests:** left-drag moves by the pointer distance, right-drag resizes, no modifier changes nothing, with XTEST button and motion events.
 - **Not verified:** nothing has been seen on screen. Real X11 programs, scaled output with X11 windows, and the clipboard are untested.
 - **Not done:** the X11/Wayland clipboard bridge; starting Xwayland on demand; stacking and active-window hints for the X side; honouring a program's own move and resize requests (they are ignored on purpose, the core owns geometry).
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### X11 and Wayland clipboard: formats cross early, data crosses on paste
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+Copy and paste worked between Wayland clients but stopped at Xwayland, which keeps selections of its own. The roadmap item was to bridge the two through the hooks Smithay's X11 window manager offers.
+
+#### Decision & Rationale
+
+**Chosen Option:** offer only the list of formats when a selection is set, and move the data when someone pastes, straight from the program that copied it. Copying the data up front would cost memory and time for every copy that is never pasted, and could not work for large or lazily produced data.
+
+#### Implementation Notes
+
+- **Wayland to X11 and back:** a selection set by a Wayland client is offered to Xwayland, and one set by an X11 program is offered to the Wayland clients, for the clipboard and the primary selection alike.
+- **Access:** an X11 program may read a Wayland selection only while an X11 window has the keyboard focus, as a Wayland client may only while one of its surfaces does. Without that, any background X11 program could read the clipboard.
+- **Clearing:** when an X11 program gives up a selection, it is cleared only if the X11 side set it. One a Wayland client holds is left alone.
+- **Event loop handle:** the transfers started by the X11 window manager need the backend's loop, so the compositor state now keeps its handle.
+- **Input module:** keyboard and pointer handling left `NestedBackend` for an `input` module that takes events from any Smithay input backend, so a libinput source can use it later. A relative pointer is kept inside the output.
+- **Smithay features:** the DRM, GBM, udev, libinput, libseat and multi-GPU features were enabled ahead of a session backend. Nothing uses them yet.
+- **Not verified:** nothing has been seen on screen; the bridge is only tested with scripted clients.
+- **Not done:** the session backend for real hardware.
 
 #### Review / Update Log
 

@@ -102,6 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `minimal_wayland` example turns Xwayland on, prints the `DISPLAY` to use, and keeps running without X11 programs if Xwayland cannot start
 - X11 integration tests for mouse drags (Super+left-drag moves, Super+right-drag resizes, a drag without the modifier does nothing) and a pointer-drag helper in the test client
 - Wayland integration tests with a real Xwayland and an X11 client: a window is reported with its title and class, placed, shares the screen with a second one, closes, a menu stays unmanaged and in front, and the focused window gets the X input focus; unit tests for how a configure request is granted
+- `lutece-wayland`: copy and paste between X11 and Wayland programs, for the clipboard and the primary selection. Only the list of formats crosses when a selection is set; the data is fetched when someone pastes. An X11 program can read a Wayland selection only while an X11 window has the keyboard focus, and a selection held by a Wayland client is not cleared when an X11 program gives up its own
+- `lutece-wayland`: an `input` module that turns events from any Smithay input backend into keyboard and pointer input for the compositor, with a relative pointer kept inside the output
+- Integration tests for selections crossing between X11 and Wayland clients
 
 ### Changed
 - `Engine::scene` now builds the scene for every screen, each in its own output's area, instead of one workspace on the first output; its focus is the focused screen's focused window
@@ -117,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland` enables Smithay's `backend_drm` feature (the `drm` crates) to identify the render node for dmabuf feedback
 - The `lutece-wayland` example is now named `minimal_wayland` (it was `minimal`, like the X11 example, and building one overwrote the other's binary in `target/<profile>/examples`); run it with `cargo run -p lutece-wayland --example minimal_wayland`
 - `lutece-wayland` enables Smithay's `xwayland` feature and has `x11rb` as a test dependency
+- `lutece-wayland`: input handling moved out of `NestedBackend` into the `input` module; `linux-dmabuf` feedback is built from the renderer's own GPU; the compositor state keeps the event loop handle that selection transfers need; Smithay is built with the DRM, GBM, udev, libinput, libseat and multi-GPU features, ahead of a session backend
 
 ### Fixed
 - The X11 integration tests started the Wayland example instead of the X11 one after both had been built, and then every test timed out waiting for the window manager
