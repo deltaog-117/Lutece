@@ -139,8 +139,8 @@ pub struct Workspace {
     tag: Tag,
     stack: Option<Stack>,
     layout: Layout,
-    /// The ratio tile gets back when the layout cycles round to it again. Only read
-    /// while another layout is showing.
+    /// The master ratio the layouts with a master column get back when the layout cycles
+    /// round to them again. Only read while a layout without one is showing.
     tile_ratio: MasterRatio,
     /// The windows the layout leaves alone. Every key is a window in `stack`: `remove`
     /// drops the entry and `set_float` refuses strangers.
@@ -150,8 +150,8 @@ pub struct Workspace {
 impl Workspace {
     pub(crate) fn empty(tag: Tag, layout: Layout) -> Self {
         let tile_ratio = match layout {
-            Layout::Tile(ratio) => ratio,
-            Layout::Monocle => MasterRatio::default(),
+            Layout::Tile(ratio) | Layout::CenteredMaster(ratio) => ratio,
+            Layout::Monocle | Layout::Grid => MasterRatio::default(),
         };
         Self {
             tag,
@@ -196,29 +196,39 @@ impl Workspace {
         self.layout
     }
 
-    /// Switches to the next layout, wrapping around. Tile keeps the master ratio it had
-    /// when it was last showing.
+    /// Switches to the next layout (tile, monocle, grid, centered master), wrapping
+    /// around. The layouts with a master column keep the ratio it had when one was last
+    /// showing.
     pub(crate) fn next_layout(&mut self) {
         self.layout = match self.layout {
             Layout::Tile(ratio) => {
                 self.tile_ratio = ratio;
                 Layout::Monocle
             }
-            Layout::Monocle => Layout::Tile(self.tile_ratio),
+            Layout::Monocle => Layout::Grid,
+            Layout::Grid => Layout::CenteredMaster(self.tile_ratio),
+            Layout::CenteredMaster(ratio) => {
+                self.tile_ratio = ratio;
+                Layout::Tile(ratio)
+            }
         };
     }
 
     /// Moves the master ratio by `delta` thousandths. Layouts without a master column
     /// ignore it.
     pub(crate) fn resize_master(&mut self, delta: i16) {
-        if let Layout::Tile(ratio) = self.layout {
-            self.layout = Layout::Tile(ratio.step(delta));
+        match self.layout {
+            Layout::Tile(ratio) => self.layout = Layout::Tile(ratio.step(delta)),
+            Layout::CenteredMaster(ratio) => {
+                self.layout = Layout::CenteredMaster(ratio.step(delta));
+            }
+            Layout::Monocle | Layout::Grid => {}
         }
     }
 
     pub(crate) fn set_layout(&mut self, layout: Layout) {
         self.layout = layout;
-        if let Layout::Tile(ratio) = layout {
+        if let Layout::Tile(ratio) | Layout::CenteredMaster(ratio) = layout {
             self.tile_ratio = ratio;
         }
     }
@@ -352,16 +362,33 @@ mod tests {
         ws.next_layout();
         assert_eq!(ws.layout(), Layout::Monocle);
         ws.next_layout();
+        assert_eq!(ws.layout(), Layout::Grid);
+        ws.next_layout();
+        assert_eq!(ws.layout(), Layout::CenteredMaster(ratio(650)));
+        ws.next_layout();
         assert_eq!(ws.layout(), Layout::Tile(ratio(650)));
     }
 
     #[test]
-    fn resizing_the_master_does_nothing_in_monocle() {
+    fn resizing_the_master_does_nothing_in_monocle_or_grid() {
+        for layout in [Layout::Monocle, Layout::Grid] {
+            let mut ws = workspace(layout);
+            ws.resize_master(100);
+            assert_eq!(ws.layout(), layout);
+        }
         let mut ws = workspace(Layout::Monocle);
-        ws.resize_master(100);
-        assert_eq!(ws.layout(), Layout::Monocle);
         ws.next_layout();
-        assert_eq!(ws.layout(), Layout::Tile(MasterRatio::default()));
+        ws.next_layout();
+        assert_eq!(ws.layout(), Layout::CenteredMaster(MasterRatio::default()));
+    }
+
+    #[test]
+    fn resizing_the_master_moves_the_centered_ratio_and_tile_inherits_it() {
+        let mut ws = workspace(Layout::CenteredMaster(ratio(550)));
+        ws.resize_master(100);
+        assert_eq!(ws.layout(), Layout::CenteredMaster(ratio(650)));
+        ws.next_layout();
+        assert_eq!(ws.layout(), Layout::Tile(ratio(650)));
     }
 
     #[test]

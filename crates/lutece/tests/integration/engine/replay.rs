@@ -463,6 +463,14 @@ fn the_layout_key_cycles_and_tile_keeps_its_ratio() {
     engine.handle(pressed('g', Modifiers::SUPER));
     assert_eq!(engine, before);
 
+    // Grid and centered master come between monocle and tile again.
+    engine.handle(pressed('n', Modifiers::SUPER));
+    assert_eq!(engine.stacks().current().layout(), Layout::Grid);
+    engine.handle(pressed('n', Modifiers::SUPER));
+    assert!(matches!(
+        engine.stacks().current().layout(),
+        Layout::CenteredMaster(_)
+    ));
     engine.handle(pressed('n', Modifiers::SUPER));
     assert_eq!(master_width(&engine), 600);
 }

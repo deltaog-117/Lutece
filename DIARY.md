@@ -28,6 +28,7 @@
 | 2026-11-02 | Keyboard remapping | Remember the grabs; refetch the table and regrab on `MappingNotify` | ✅ Confirmed |
 | 2026-11-02 | X11 integration tests | Example WM on a private Xvfb, keys pressed through XTEST | ✅ Confirmed |
 | 2026-11-02 | Headless CI | `scripts/ci` requires Xvfb; a GitHub Actions workflow calls it | ✅ Confirmed |
+| 2026-11-02 | More layouts | Grid and centered master as new enum variants; one shared master ratio | ✅ Confirmed |
 
 ---
 
@@ -863,6 +864,39 @@ The check stays the single source of what is verified. The workflow is the only 
 - `scripts/ci` fails at once if `Xvfb` is not on the path, then runs `scripts/check` with `LUTECE_REQUIRE_X11=1`.
 - `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests, with read-only permissions.
 - Not done: toolchain and dependency caching, and a run on a real runner. The workflow has not run yet.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### More layouts: grid and centered master
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The layout enum had tile and monocle. The roadmap asked for grid and centered master as small separate modules.
+
+#### Options Considered
+
+Only one approach was credible, so no COAs: the enum is closed on purpose, so new layouts are new variants with their own module.
+
+#### Decision & Rationale
+
+**Chosen Option:** Add `Grid` and `CenteredMaster(MasterRatio)`, each in its own file, with a small `span` helper that cuts a length into parts and gives leftover pixels to the first parts.
+
+Centered master takes a ratio like tile, and the workspace keeps one ratio for both, so `GrowMaster` works on either and the ratio survives a trip round the cycle. With one or two windows there is nothing to flank the master, so centered master falls back to tile.
+
+#### Implementation Notes
+
+- Cycle order is tile, monocle, grid, centered master. The two existing tests that expected a two-step cycle were changed to the four-step one.
+- `tile.rs` keeps its own copy of the splitting arithmetic; it was left alone to keep the change small.
+- Property tests check, for both layouts, that cells cover the area exactly with no overlap, and that too-small areas fail with `AreaTooSmall`.
 
 #### Review / Update Log
 

@@ -26,6 +26,7 @@ Author: deltaog-117
 - ✅ Keyboard remapping – the X11 backend refetches the keycode table on `MappingNotify` and grabs its keys again, skipping keys the new layout lacks
 - ✅ Scripted X11 integration tests – the example WM runs on a private `Xvfb` and the tests press keys through XTEST and assert window geometry
 - ✅ Headless CI check – `scripts/ci` requires `Xvfb` and runs the check; a GitHub Actions workflow calls it
+- ✅ More layouts – `Grid` and `CenteredMaster` as separate modules; `NextLayout` cycles tile, monocle, grid, centered master, and the master ratio carries across tile and centered master
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
@@ -44,7 +45,6 @@ Author: deltaog-117
 
 ## 🟢 Low Priority (Nice‑to‑Have)
 
-- **More layouts** – grid, centered master, and similar, as separate small modules.
 - **Documentation site** – guide on writing a WM with the library.
 
 ---

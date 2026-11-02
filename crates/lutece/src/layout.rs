@@ -1,7 +1,10 @@
 //! Layouts: pure functions from a workspace's windows and an output rectangle to the
 //! rectangles those windows should fill. No display and no state.
 
+mod centered;
+mod grid;
 mod monocle;
+mod span;
 mod tile;
 
 use crate::shared::contracts::scene::Placement;
@@ -23,6 +26,10 @@ pub enum Layout {
     Tile(MasterRatio),
     /// Every window full size, the focused one on top.
     Monocle,
+    /// Rows of equal height, as square as the window count allows.
+    Grid,
+    /// The first window in a middle column, the rest alternating to its right and left.
+    CenteredMaster(MasterRatio),
 }
 
 impl Default for Layout {
@@ -64,6 +71,8 @@ impl Layout {
         match self {
             Self::Tile(ratio) => tile::arrange(ratio, area, windows),
             Self::Monocle => Ok(monocle::arrange(area, windows, focus)),
+            Self::Grid => grid::arrange(area, windows),
+            Self::CenteredMaster(ratio) => centered::arrange(ratio, area, windows),
         }
     }
 }
@@ -86,5 +95,18 @@ mod tests {
             .arrange(area, &windows, None)
             .expect("never fails");
         assert!(stacked.iter().all(|p| p.rect == area));
+
+        let three = [WinId::new(1), WinId::new(2), WinId::new(3)];
+        let centered = Layout::CenteredMaster(MasterRatio::default())
+            .arrange(area, &three, None)
+            .expect("fits");
+        assert!(
+            centered[0].rect.x() > 0,
+            "the master is not on the left edge"
+        );
+
+        let gridded = Layout::Grid.arrange(area, &three, None).expect("fits");
+        assert_eq!(gridded[0].rect.y(), gridded[1].rect.y());
+        assert!(gridded[2].rect.y() > gridded[0].rect.y());
     }
 }

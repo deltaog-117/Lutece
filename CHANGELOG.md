@@ -64,7 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keyboard remapping: the X11 backend refetches the keycode table on a keyboard `MappingNotify` and grabs its keys again, so bindings follow their keys after a layout change; keys the new layout lacks are skipped
 - Integration tests in `crates/lutece-x11/tests/integration` that run the `minimal` example on a private `Xvfb` and press keys through XTEST (tiling, rules, floating, layout keys, workspaces, close, quit, keyboard remap)
 - `scripts/ci`, which runs `scripts/check` and fails if `Xvfb` is missing, and a GitHub Actions workflow that calls it
+- `Layout::Grid` (rows of equal height, as square as the count allows) and `Layout::CenteredMaster` (the master in a middle column, the rest alternating to its right and left); both cover the area exactly, checked by property tests
+- `GrowMaster` and `ShrinkMaster` also move the centered master's column
 
 ### Changed
+- `NextLayout` now cycles tile, monocle, grid, centered master; tile and centered master share one master ratio per workspace
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside

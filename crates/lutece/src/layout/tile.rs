@@ -66,7 +66,7 @@ impl MasterRatio {
 
     /// The master width for an area `width` wide; `width` must be at least 2.
     /// Clamped so the master and the rest each keep at least one pixel.
-    fn master_width(self, width: u32) -> u32 {
+    pub(super) fn master_width(self, width: u32) -> u32 {
         let scaled = u64::from(width) * u64::from(self.0) / 1000;
         let clamped = scaled.clamp(1, u64::from(width - 1));
         // The clamp keeps it below `width`, so the conversion cannot fail.
