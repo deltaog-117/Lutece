@@ -23,6 +23,9 @@ Author: deltaog-117
 - ✅ Layout and master-ratio keys – each workspace keeps its own `Layout`; `NextLayout`, `GrowMaster` and `ShrinkMaster` actions cycle it and move the master column in 5% steps; the example binds Super+space, h and l
 - ✅ Manage rules – `Rules` of `ManageRule`s match a new window by class, title or dialog status; the first match either ignores the window (`Effect::Release` hands it back to its client) or opens it on another workspace; `Engine::with_rules` refuses an unknown workspace
 - ✅ Floating windows – a floating window keeps a position and size relative to a default rectangle centered in the screen, is left out of the layout and drawn above the tiles; `Outcome::Float` opens a window floating, and `ToggleFloat`, `MoveFloat` and `ResizeFloat` actions change it
+- ✅ Keyboard remapping – the X11 backend refetches the keycode table on `MappingNotify` and grabs its keys again, skipping keys the new layout lacks
+- ✅ Scripted X11 integration tests – the example WM runs on a private `Xvfb` and the tests press keys through XTEST and assert window geometry
+- ✅ Headless CI check – `scripts/ci` requires `Xvfb` and runs the check; a GitHub Actions workflow calls it
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 
 ---
@@ -36,14 +39,11 @@ Author: deltaog-117
 ## 🟡 Medium Priority (Important)
 
 - **Multi-output support** – several screens in the scene, with focus moving between them.
-- **Scripted X11 integration tests** – drive the nested X server with `xdotool` and assert window geometry.
-- **Headless CI check** – run the core tests and X11 integration tests with `Xvfb`.
 
 ---
 
 ## 🟢 Low Priority (Nice‑to‑Have)
 
-- **Keyboard remapping** – refresh the X11 keycode table on `MappingNotify` and re-grab.
 - **More layouts** – grid, centered master, and similar, as separate small modules.
 - **Documentation site** – guide on writing a WM with the library.
 
@@ -60,4 +60,5 @@ Author: deltaog-117
 ## 🎯 Next Actions (Immediate)
 
 1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Keyboard remapping** – refresh the X11 keycode table on `MappingNotify` and re-grab.
+2. **Run the integration tests once on a machine with `Xvfb`** – none was available while writing them, so they have only been compiled.
+3. **Multi-output support** – several screens in the scene, with focus moving between them.

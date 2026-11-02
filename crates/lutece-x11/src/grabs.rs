@@ -9,7 +9,9 @@ use lutece::{KeyPress, Keysym, Modifiers};
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::ErrorKind;
-use x11rb::protocol::xproto::{ConnectionExt, GrabMode, KeyButMask, Keycode, ModMask, Window};
+use x11rb::protocol::xproto::{
+    ConnectionExt, Grab, GrabMode, KeyButMask, Keycode, ModMask, Window,
+};
 
 /// CapsLock and NumLock (Mod2 on practically every setup) must not stop a binding from
 /// matching, so each key is grabbed with every combination of them held.
@@ -67,6 +69,35 @@ impl Keyboard {
             .filter(move |(_, raw)| keysym.0 != 0 && **raw == keysym.0)
             .filter_map(|(row, _)| Keycode::try_from(row).ok()?.checked_add(self.min_keycode))
     }
+}
+
+/// Drops every key grab this client holds on `root` and grabs `presses` again against the
+/// current `keyboard` table.
+///
+/// A press whose keysym no key produces any more (the new layout lacks it) is left
+/// ungrabbed instead of failing: a layout switch must not end the window manager, and the
+/// press is grabbed again by the next remap that brings the key back.
+///
+/// # Errors
+///
+/// Returns [`Error::KeyAlreadyGrabbed`] if another client took a combination meanwhile.
+pub(crate) fn regrab_keys(
+    conn: &impl Connection,
+    keyboard: &Keyboard,
+    root: Window,
+    presses: &[KeyPress],
+) -> Result<()> {
+    // Every key grab on the root is ours, so dropping all of them drops only ours.
+    conn.ungrab_key(Grab::ANY, root, ModMask::ANY)?;
+    grab_keys(
+        conn,
+        keyboard,
+        root,
+        presses
+            .iter()
+            .copied()
+            .filter(|press| keyboard.keycodes_of(press.keysym).next().is_some()),
+    )
 }
 
 /// The lutece modifiers held in an X key state. Lock keys and mouse buttons are left

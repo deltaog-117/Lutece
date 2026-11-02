@@ -25,6 +25,9 @@
 | 2026-10-30 | Adopting existing windows | Scan the root's children at connect, report them as `WindowOpened` | ✅ Confirmed |
 | 2026-10-30 | Manage rules | Ignore and workspace rules as data; float waits for floating windows | ✅ Confirmed |
 | 2026-10-31 | Floating windows | Offsets from a centered default rectangle, kept per workspace | ✅ Confirmed |
+| 2026-11-02 | Keyboard remapping | Remember the grabs; refetch the table and regrab on `MappingNotify` | ✅ Confirmed |
+| 2026-11-02 | X11 integration tests | Example WM on a private Xvfb, keys pressed through XTEST | ✅ Confirmed |
+| 2026-11-02 | Headless CI | `scripts/ci` requires Xvfb; a GitHub Actions workflow calls it | ✅ Confirmed |
 
 ---
 
@@ -755,3 +758,114 @@ It delivers the whole roadmap item inside the core, where the model-based and re
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-10-31 | Initial entry | deltaog-117 |
+
+---
+
+### Keyboard remapping: regrab when the keycode table changes
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The backend fetched the keycode table once at connect. After a layout switch (`setxkbmap`, `xmodmap`) the same key produces another keysym, so grabs sat on the wrong keys and presses were translated with a stale table.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Remember the grabbed presses; refetch and regrab on `MappingNotify` | Bindings follow their keys; no new API | The backend keeps a list of presses | S |
+| B. Ask the host to call `grab_keys` again on a new event | Backend stays stateless | Every host repeats the glue; needs a new `Event` | M |
+| C. Grab every key and match in the core | No regrab ever | Steals all keyboard input from clients | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+It is the only option that needs no change in the core or in hosts. The backend already owns the keycode table, so keeping it current is its job.
+
+#### Implementation Notes
+
+- Only a keyboard remap (`Mapping::KEYBOARD`) triggers it. Modifier and pointer remaps are ignored: CapsLock and NumLock are always grabbed on Lock and Mod2, so those grabs stay valid.
+- `regrab_keys` drops every key grab on the root and grabs again. Every key grab on the root is this client's, so nothing foreign is dropped.
+- A press whose keysym no key produces any more is skipped, not an error: a layout switch must not end the window manager. It is grabbed again by the next remap that brings the key back.
+- If another client grabbed a combination in the meantime, the error is `KeyAlreadyGrabbed`, as at the first grab.
+- Not tested here: the new integration test swaps two keys on a real server, but no headless server is installed on this machine, so it only compiled locally.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### X11 integration tests: example WM on Xvfb, keys through XTEST
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+Nothing so far checked real window geometry or key presses against an X server. The roadmap named `xdotool` for this.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Test client in Rust over x11rb, keys through XTEST | No external tool beyond the server; typed geometry reads | A small client to maintain | M |
+| B. Shell out to `xdotool` and `xwininfo` | Less code | Two more tools to install; text parsing | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+The tests already depend on x11rb, and XTEST fakes key presses the way a keyboard would. CI then needs only `Xvfb`.
+
+#### Implementation Notes
+
+- `tests/integration` starts its own `Xvfb` on a display number between 90 and 190 that has no socket or lock file, runs the `minimal` example on it, and acts as a client: it opens windows, presses keys, and polls their geometry with a timeout.
+- Without `Xvfb` each test prints a notice and passes; with `LUTECE_REQUIRE_X11` set a missing server is a failure.
+- Covers tiling, rules, floating, layout and master keys, workspaces, closing and quitting, and the keyboard remap.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Headless CI: `scripts/ci` and a GitHub Actions workflow
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The integration tests skip when `Xvfb` is missing, so a CI runner without it would report success for tests that never ran.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. `scripts/ci` sets `LUTECE_REQUIRE_X11` and runs `scripts/check`; the workflow only installs Xvfb and calls it | Same command locally and in CI; one place for the rule | One more script | S |
+| B. Put the steps in the workflow only | No extra script | Cannot be reproduced locally | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+The check stays the single source of what is verified. The workflow is the only host-specific part.
+
+#### Implementation Notes
+
+- `scripts/ci` fails at once if `Xvfb` is not on the path, then runs `scripts/check` with `LUTECE_REQUIRE_X11=1`.
+- `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests, with read-only permissions.
+- Not done: toolchain and dependency caching, and a run on a real runner. The workflow has not run yet.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |

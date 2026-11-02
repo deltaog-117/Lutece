@@ -2,7 +2,7 @@
 
 use crate::apply::{Flow, execute, plan, run_effects};
 use crate::error::{Error, Result};
-use crate::grabs::{Keyboard, grab_keys};
+use crate::grabs::{Keyboard, grab_keys, regrab_keys};
 use crate::translate::{existing, key_press, translate};
 use crate::windows::Windows;
 use lutece::{Effect, Event, KeyPress, Output, OutputId, Rect, Scene, WindowInfo, diff};
@@ -13,7 +13,8 @@ use x11rb::errors::ReplyError;
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask, Window,
+    AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask, Mapping,
+    Window,
 };
 use x11rb::rust_connection::RustConnection;
 
@@ -41,6 +42,8 @@ pub struct X11Backend {
     root: Window,
     atoms: Atoms,
     keyboard: Keyboard,
+    /// The key combinations grabbed so far, to grab again after a keyboard remap.
+    grabbed: Vec<KeyPress>,
     windows: Windows,
     /// What the X server is showing, so a new scene is applied as a difference.
     shown: Scene,
@@ -95,6 +98,7 @@ impl X11Backend {
             root,
             atoms,
             keyboard,
+            grabbed: Vec::new(),
             windows,
             shown: Scene::empty(),
             queued,
@@ -141,7 +145,19 @@ impl X11Backend {
     /// [`Error::KeyAlreadyGrabbed`] if another client holds a combination, or an error
     /// if the connection to the X server breaks.
     pub fn grab_keys(&mut self, presses: impl IntoIterator<Item = KeyPress>) -> Result<()> {
-        grab_keys(&self.conn, &self.keyboard, self.root, presses)?;
+        let presses: Vec<KeyPress> = presses.into_iter().collect();
+        grab_keys(
+            &self.conn,
+            &self.keyboard,
+            self.root,
+            presses.iter().copied(),
+        )?;
+        // Kept so the same keys can be grabbed again when the keyboard is remapped.
+        for press in presses {
+            if !self.grabbed.contains(&press) {
+                self.grabbed.push(press);
+            }
+        }
         self.conn.flush()?;
         Ok(())
     }
@@ -175,8 +191,10 @@ impl X11Backend {
     fn translate_into_queue(&mut self, event: &XEvent) -> Result<()> {
         let Self {
             conn,
+            root,
             atoms,
             keyboard,
+            grabbed,
             windows,
             queued,
             ..
@@ -184,6 +202,16 @@ impl X11Backend {
 
         if let XEvent::KeyPress(press) = event {
             queued.extend(key_press(keyboard, press));
+            return Ok(());
+        }
+
+        if let XEvent::MappingNotify(mapping) = event {
+            // Only a keycode table change matters; modifier and pointer remaps leave the
+            // grabs valid, since CapsLock and NumLock are always grabbed on Lock and Mod2.
+            if mapping.request == Mapping::KEYBOARD {
+                *keyboard = Keyboard::fetch(conn)?;
+                regrab_keys(conn, keyboard, *root, grabbed)?;
+            }
             return Ok(());
         }
 

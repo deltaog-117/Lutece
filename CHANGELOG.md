@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Workspace::is_floating` and `StackSet::toggle_float`; a window keeps floating, and its place, when it moves to another workspace
 - Tests for the float arithmetic (valid rectangle for any input, undoable moves, no dead zone at the size floor), for float state on workspaces, and for float rules and keys replayed through the engine
 - The `minimal` example floats dialogs and binds Super+f (toggle), Super+Ctrl+h/j/k/l (move) and Super+Ctrl+Shift+h/j/k/l (resize)
+- Keyboard remapping: the X11 backend refetches the keycode table on a keyboard `MappingNotify` and grabs its keys again, so bindings follow their keys after a layout change; keys the new layout lacks are skipped
+- Integration tests in `crates/lutece-x11/tests/integration` that run the `minimal` example on a private `Xvfb` and press keys through XTEST (tiling, rules, floating, layout keys, workspaces, close, quit, keyboard remap)
+- `scripts/ci`, which runs `scripts/check` and fails if `Xvfb` is missing, and a GitHub Actions workflow that calls it
 
 ### Changed
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with

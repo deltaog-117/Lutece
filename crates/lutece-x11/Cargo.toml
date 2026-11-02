@@ -15,3 +15,5 @@ x11rb = "0.14"
 
 [dev-dependencies]
 proptest = "1"
+# XTEST lets the integration tests press keys the way a keyboard would.
+x11rb = { version = "0.14", features = ["xtest"] }

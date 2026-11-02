@@ -1,0 +1,16 @@
+#!/bin/sh
+# CI entry point: the project check, with the X11 integration tests required to run.
+# Without this, a runner that lacks Xvfb would skip them and still report success.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+command -v Xvfb >/dev/null || {
+    echo "ci: Xvfb not found in PATH (install the xvfb package)" >&2
+    exit 1
+}
+
+LUTECE_REQUIRE_X11=1
+export LUTECE_REQUIRE_X11
+
+exec scripts/check
