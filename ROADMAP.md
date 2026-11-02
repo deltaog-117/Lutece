@@ -45,7 +45,9 @@ Author: deltaog-117
 - ✅ Popups and window moves – a popup follows its window by itself; when a move leaves it somewhere its positioner rules would not put it (a menu slid back from an edge, or one that now leaves the output) it is dismissed, since the protocol lets a compositor place a popup only when it opens or its client asks
 - ✅ X11 integration tests run – the suite ran for the first time on a real `Xvfb` and all of it passes, `monitors` included (so RandR changes on `Xvfb` do reach the backend). Two faults in the test harness itself came out: the Wayland example was also named `minimal`, so building it overwrote the X11 example the tests start (it is now `minimal_wayland`), and the key-swap helper copied one key's symbols over the other's, so the remap test could not find `l`
 - ✅ X11 drag tests – three tests with XTEST pointer events: Super+left-drag moves a floating window, Super+right-drag resizes it, and a drag without the modifier changes nothing
-- ✅ XWayland windows – `WaylandBackend::enable_xwayland` runs Xwayland and the window manager side Smithay needs; an X11 window is reported as `WindowOpened` (title and class from its properties, a dialog's parent as `transient_for`), tiled, floated, focused (the X input focus follows) and closed like any other, and a spawned program gets `DISPLAY`. X11 menus and tooltips (override-redirect) are not managed: they are drawn above everything where their program put them and do not take focus. Tested with a real Xwayland and an X11 client of its own; copy and paste between X11 and Wayland programs is not done
+- ✅ XWayland windows – `WaylandBackend::enable_xwayland` runs Xwayland and the window manager side Smithay needs; an X11 window is reported as `WindowOpened` (title and class from its properties, a dialog's parent as `transient_for`), tiled, floated, focused (the X input focus follows) and closed like any other, and a spawned program gets `DISPLAY`. X11 menus and tooltips (override-redirect) are not managed: they are drawn above everything where their program put them and do not take focus. Tested with a real Xwayland and an X11 client of its own; copy and paste between X11 and Wayland programs is done in the next item
+- ✅ Clipboard between X11 and Wayland programs – Xwayland's selections are bridged to the Wayland ones for the clipboard and the primary selection: only the format list crosses when a selection is set, the data moves on paste straight from the program that copied it; an X11 program reads a Wayland selection only while an X11 window has the keyboard focus; a selection a Wayland client holds is not cleared by an X11 program giving up its own
+- ✅ Input module and hardware groundwork – keyboard and pointer handling moved out of `NestedBackend` into `input`, which takes events from any Smithay input backend (winit now, libinput later) and keeps a relative pointer inside the output; Smithay gains the DRM, GBM, udev, libinput, libseat and multi-GPU features, not yet used by a session backend
 
 ---
 
@@ -57,13 +59,19 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-- **Clipboard between X11 and Wayland programs** – bridge Xwayland's selections to the Wayland ones (Smithay's `X11Wm` has the hooks), so copy and paste cross the two.
+Needed before `lucarne` can be written on top of the library, in this order:
+
+- **Fullscreen windows in the core** – a window can ask for, and be given, the whole output; both backends lay out around it.
+- **X11 hints and struts** – EWMH and ICCCM hints (`_NET_WM_STATE`, fullscreen, `_NET_WM_STRUT`) so a bar on X11 is not covered by tiled windows.
+- **Layer-shell on Wayland** – bars, launchers and wallpapers, with the space they reserve taken out of the area windows are laid out in.
+- **First tagged release** – a `0.x` version of the three crates with the changelog moved out of `[Unreleased]`, so `lucarne` depends on a version and not on a path.
 
 ---
 
 ## 🟢 Low Priority (Nice‑to‑Have)
 
 - **Documentation site** – guide on writing a WM with the library.
+- **Stacking and active-window hints for X11 windows under Xwayland** – EWMH hints for the X side; X11 programs mostly work without them.
 - **Start Xwayland on demand** – today it starts with `enable_xwayland`; starting it when the first X11 program connects saves its memory when none is used.
 
 ---
@@ -71,13 +79,14 @@ Author: deltaog-117
 ## 🔭 Long‑Term Vision
 
 - **Wayland on real hardware** – a session backend for `lutece-wayland` (DRM, libinput, seat management) so it can run as the compositor of a login, not only nested.
+- **Session lock and idle protocols** – what a login compositor needs on top of the hardware backend; only after that backend exists.
+- **`lucarne`, the suckless-style WM** – its own repository and its own dev loop, built on a tagged release of lutece; starts on X11, the more complete backend, unless the Wayland work above is done first. Building it shows which gaps in the library matter.
 - **Plugin protocol** – serializable `Event` and `Effect` over a socket, so the plugin-capable WM can host plugins in any language (lives in that WM, not this library).
 
 ---
 
 ## 🎯 Next Actions (Immediate)
 
-1. **Look at the nested Wayland WM** – run `cargo run -p lutece-wayland --example minimal_wayland` (and with `LUTECE_OUTPUTS=2`) and confirm by eye that windows are drawn, tiled and follow the keys, that the pointer focuses windows, that Alt+drag moves a floating window (Alt+f first), that a menu opens, closes and stays on its output, that Alacritty draws no title bar of its own, that a client with a shadow (a GTK window) does not paint over its neighbour, that Alt+, and Alt+. move between the two outputs, that copy and paste work between two terminals, and that on a host at a scale other than 1 (try 1.5) windows have the size you expect and text in Alacritty or a GTK 4 app is sharp, and that a client without fractional scale (a GTK 3 app) is sharp too; that a GPU client (`weston-simple-dmabuf-egl`, or Firefox) draws and is not blank, which also shows whether this machine's EGL device gives a render node (`/dev/dri/renderD128` exists here; with software rendering the nested compositor offers no dmabuf); and, new, that an X11 program (`DISPLAY=:N` is printed at startup; try `xterm` or `xeyes`) is tiled with the others, takes focus and typing, that its menus open in place and over its window, and that it is not blurry at a scale of 1.5; none of this has been seen on screen yet (only tested with a scripted client and a scripted X11 client). The one run so far only showed the startup line.
+1. **Look at the nested Wayland WM** – run `cargo run -p lutece-wayland --example minimal_wayland` (and with `LUTECE_OUTPUTS=2`) and confirm by eye that windows are drawn, tiled and follow the keys, that the pointer focuses windows, that Alt+drag moves a floating window (Alt+f first), that a menu opens, closes and stays on its output, that Alacritty draws no title bar of its own, that a client with a shadow (a GTK window) does not paint over its neighbour, that Alt+, and Alt+. move between the two outputs, that copy and paste work between two terminals, and that on a host at a scale other than 1 (try 1.5) windows have the size you expect and text in Alacritty or a GTK 4 app is sharp, and that a client without fractional scale (a GTK 3 app) is sharp too; that a GPU client (`weston-simple-dmabuf-egl`, or Firefox) draws and is not blank, which also shows whether this machine's EGL device gives a render node (`/dev/dri/renderD128` exists here; with software rendering the nested compositor offers no dmabuf); that copy and paste cross between an X11 program (`xterm`) and a Wayland one, in both directions, for the clipboard and for selecting text with the mouse; and that an X11 program (`DISPLAY=:N` is printed at startup; try `xterm` or `xeyes`) is tiled with the others, takes focus and typing, that its menus open in place and over its window, and that it is not blurry at a scale of 1.5; none of this has been seen on screen yet (only tested with a scripted client and a scripted X11 client). The one run so far only showed the startup line.
 2. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-3. **Clipboard between X11 and Wayland programs** – see Medium Priority.
-4. **Documentation site** – guide on writing a WM with the library.
+3. **Documentation site** – guide on writing a WM with the library.
