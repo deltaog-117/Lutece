@@ -6,6 +6,7 @@
 //! should) to make a missing server a failure instead.
 
 mod keys;
+mod monitors;
 mod rules;
 mod support;
 mod tiling;

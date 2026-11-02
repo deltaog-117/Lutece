@@ -25,8 +25,9 @@ impl Engine {
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
     /// focused window and spawning a program.
     ///
-    /// The first output is the screen windows are laid out on. An empty set of outputs
-    /// leaves nothing to show.
+    /// Each reported output is a screen showing one workspace; see
+    /// [`StackSet::set_outputs`](crate::StackSet::set_outputs) for which. A report that
+    /// lists no outputs leaves nothing to show until the next one.
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         let mut effects = Vec::new();
         match event {
@@ -45,7 +46,9 @@ impl Engine {
                 }
             }
             Event::OutputsChanged(outputs) => {
-                self.screen = outputs.first().map(|output| output.rect);
+                let ids: Vec<_> = outputs.iter().map(|output| output.id).collect();
+                self.stacks.set_outputs(&ids);
+                self.outputs = outputs;
             }
         }
         effects
@@ -92,6 +95,10 @@ impl Engine {
             Action::MoveToTag(tag) => {
                 let _ = self.stacks.move_focused_to(&tag);
             }
+            Action::FocusNextOutput => self.stacks.focus_next_output(),
+            Action::FocusPrevOutput => self.stacks.focus_prev_output(),
+            Action::SendToNextOutput => self.stacks.send_focused_to_next_output(),
+            Action::SendToPrevOutput => self.stacks.send_focused_to_prev_output(),
             Action::ToggleFloat => self.stacks.toggle_float(),
             Action::MoveFloat(direction) => {
                 let (dx, dy) = direction.delta(FLOAT_STEP);
@@ -101,7 +108,7 @@ impl Engine {
             Action::ResizeFloat(direction) => {
                 // A floating size is relative to the screen, so with no screen yet there
                 // is nothing to resize against.
-                if let Some(area) = self.screen {
+                if let Some(area) = self.area_of(self.stacks.current_output()) {
                     let (dw, dh) = direction.delta(FLOAT_STEP);
                     self.stacks
                         .update_focused_float(|float| float.resized(area, dw, dh));

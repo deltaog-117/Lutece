@@ -1,4 +1,5 @@
-//! A window manager in one file: windows are tiled on nine workspaces and driven by keys.
+//! A window manager in one file: windows are tiled on nine workspaces, shown on one or
+//! several monitors, and driven by keys.
 //!
 //! Run it on a spare display, for example `Xephyr :2`, then start clients with
 //! `DISPLAY=:2 xterm`. Keys (Super is the logo key):
@@ -15,6 +16,8 @@
 //! | Super+f | float the focused window, or tile it again |
 //! | Super+Ctrl+h/j/k/l | move the floating window left / down / up / right |
 //! | Super+Ctrl+Shift+h/j/k/l | narrow / heighten / shorten / widen the floating window |
+//! | Super+, / Super+. | focus the previous / next monitor |
+//! | Super+Shift+, / Super+Shift+. | send the focused window to the previous / next monitor |
 //! | Super+Shift+c | close the focused window |
 //! | Super+Shift+q | quit |
 //!
@@ -67,6 +70,10 @@ fn keymap(tags: &[Tag]) -> Result<Keymap> {
         keymap.bind(key(letter, moving)?, Action::MoveFloat(direction))?;
         keymap.bind(key(letter, resizing)?, Action::ResizeFloat(direction))?;
     }
+    keymap.bind(key(',', Modifiers::SUPER)?, Action::FocusPrevOutput)?;
+    keymap.bind(key('.', Modifiers::SUPER)?, Action::FocusNextOutput)?;
+    keymap.bind(key(',', shifted)?, Action::SendToPrevOutput)?;
+    keymap.bind(key('.', shifted)?, Action::SendToNextOutput)?;
     keymap.bind(key('c', shifted)?, Action::Close)?;
     keymap.bind(key('q', shifted)?, Action::Quit)?;
     for (digit, tag) in ('1'..='9').zip(tags) {

@@ -36,6 +36,16 @@ pub enum Action {
     /// Send the focused window to the workspace with this tag. Does nothing if there is
     /// none.
     MoveToTag(Tag),
+    /// Move the focus to the next output's screen, wrapping around. Does nothing with one
+    /// screen.
+    FocusNextOutput,
+    /// Move the focus to the previous output's screen, wrapping around.
+    FocusPrevOutput,
+    /// Send the focused window to the workspace the next output's screen shows; the focus
+    /// stays on this screen. Does nothing with one screen.
+    SendToNextOutput,
+    /// Send the focused window to the workspace the previous output's screen shows.
+    SendToPrevOutput,
     /// Float the focused window if it is tiled, or tile it again if it floats.
     ToggleFloat,
     /// Move the focused window a step this way. Does nothing unless it floats.

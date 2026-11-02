@@ -137,6 +137,9 @@ impl Stack {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     tag: Tag,
+    /// Where the tag sits in the configured order. A workspace moves between screens and
+    /// the hidden pool, so the order cannot be read from where it is stored.
+    rank: usize,
     stack: Option<Stack>,
     layout: Layout,
     /// The master ratio the layouts with a master column get back when the layout cycles
@@ -148,18 +151,23 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub(crate) fn empty(tag: Tag, layout: Layout) -> Self {
+    pub(crate) fn empty(tag: Tag, layout: Layout, rank: usize) -> Self {
         let tile_ratio = match layout {
             Layout::Tile(ratio) | Layout::CenteredMaster(ratio) => ratio,
             Layout::Monocle | Layout::Grid => MasterRatio::default(),
         };
         Self {
             tag,
+            rank,
             stack: None,
             layout,
             tile_ratio,
             floating: HashMap::new(),
         }
+    }
+
+    pub(crate) fn rank(&self) -> usize {
+        self.rank
     }
 
     /// Whether `id` floats instead of being placed by the layout.
@@ -348,7 +356,7 @@ mod tests {
     }
 
     fn workspace(layout: Layout) -> Workspace {
-        Workspace::empty(Tag::try_new("1").expect("tag has text"), layout)
+        Workspace::empty(Tag::try_new("1").expect("tag has text"), layout, 0)
     }
 
     fn ratio(permille: u16) -> MasterRatio {

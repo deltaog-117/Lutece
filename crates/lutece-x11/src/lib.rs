@@ -27,6 +27,7 @@ mod apply;
 mod connection;
 mod error;
 mod grabs;
+mod outputs;
 mod translate;
 mod windows;
 

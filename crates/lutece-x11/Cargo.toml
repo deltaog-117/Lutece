@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 lutece = { path = "../lutece" }
 thiserror = "2"
-x11rb = "0.14"
+x11rb = { version = "0.14", features = ["randr"] }
 
 [dev-dependencies]
 proptest = "1"

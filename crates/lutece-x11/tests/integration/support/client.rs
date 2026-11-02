@@ -4,6 +4,7 @@
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
+use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
 use x11rb::protocol::xproto::{
     AtomEnum, ConnectionExt, CreateWindowAux, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MapState,
     PropMode, Window, WindowClass,
@@ -155,6 +156,50 @@ impl Client {
         self.conn.map_window(window).expect("map_window");
         self.round_trip();
         window
+    }
+
+    /// Splits the screen into a left and a right monitor of equal width, with RandR 1.5.
+    /// The left one takes over the server's own outputs, so that the server's automatic
+    /// monitor for them does not stay on top of the two.
+    pub fn split_into_two_monitors(&self, width: u16, height: u16) {
+        self.conn
+            .randr_query_version(1, 5)
+            .expect("randr version request")
+            .reply()
+            .expect("the server speaks RandR 1.5");
+        let outputs = self
+            .conn
+            .randr_get_screen_resources_current(self.root)
+            .expect("screen resources request")
+            .reply()
+            .expect("screen resources reply")
+            .outputs;
+        let half = width / 2;
+        for (name, x, outputs) in [("left", 0, outputs), ("right", half, Vec::new())] {
+            let name = self
+                .conn
+                .intern_atom(false, name.as_bytes())
+                .expect("intern request")
+                .reply()
+                .expect("intern reply")
+                .atom;
+            let monitor = MonitorInfo {
+                name,
+                primary: false,
+                automatic: false,
+                x: i16::try_from(x).expect("small"),
+                y: 0,
+                width: half,
+                height,
+                width_in_millimeters: 0,
+                height_in_millimeters: 0,
+                outputs,
+            };
+            self.conn
+                .randr_set_monitor(self.root, monitor)
+                .expect("set monitor request");
+        }
+        self.round_trip();
     }
 
     /// Destroys a window this client created.

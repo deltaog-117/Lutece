@@ -11,8 +11,10 @@ use crate::input::Keymap;
 use crate::layout::Layout;
 use crate::rules::Rules;
 use crate::shared::contracts::event::KeyPress;
+use crate::shared::contracts::event::Output;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::Rect;
+use crate::shared::ids::OutputId;
 use crate::stack::stackset::StackSet;
 
 /// The window manager's state and the rules that change it.
@@ -41,12 +43,13 @@ pub struct Engine {
     stacks: StackSet,
     keymap: Keymap,
     rules: Rules,
-    /// The area windows are laid out in; `None` until the backend reports a screen.
-    screen: Option<Rect>,
+    /// The outputs the backend reported, and the area each one covers; empty until the
+    /// backend reports any.
+    outputs: Vec<Output>,
 }
 
 impl Engine {
-    /// Builds an engine with no screen yet. Every workspace starts with `layout` and can
+    /// Builds an engine with no outputs yet. Every workspace starts with `layout` and can
     /// change it on its own afterwards.
     #[must_use]
     pub fn new(stacks: StackSet, layout: Layout) -> Self {
@@ -54,7 +57,7 @@ impl Engine {
             stacks: stacks.with_layout(layout),
             keymap: Keymap::new(),
             rules: Rules::new(),
-            screen: None,
+            outputs: Vec::new(),
         }
     }
 
@@ -93,5 +96,13 @@ impl Engine {
     #[must_use]
     pub fn stacks(&self) -> &StackSet {
         &self.stacks
+    }
+
+    /// The area `output` covers, if the backend reported it.
+    fn area_of(&self, output: OutputId) -> Option<Rect> {
+        self.outputs
+            .iter()
+            .find(|reported| reported.id == output)
+            .map(|reported| reported.rect)
     }
 }

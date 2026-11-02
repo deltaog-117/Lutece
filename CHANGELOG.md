@@ -66,8 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/ci`, which runs `scripts/check` and fails if `Xvfb` is missing, and a GitHub Actions workflow that calls it
 - `Layout::Grid` (rows of equal height, as square as the count allows) and `Layout::CenteredMaster` (the master in a middle column, the rest alternating to its right and left); both cover the area exactly, checked by property tests
 - `GrowMaster` and `ShrinkMaster` also move the centered master's column
+- Multi-output support: `StackSet` shows its workspaces on screens, one per output, with the rest hidden; `StackSet::set_outputs`, `screens`, `current_output`, `focus_next_output`, `focus_prev_output`, `send_focused_to_next_output` and `send_focused_to_prev_output`
+- Actions `FocusNextOutput`, `FocusPrevOutput`, `SendToNextOutput` and `SendToPrevOutput`
+- Unplugging an output hides its workspace with its windows; a new output takes the workspace of one that vanished, then the first hidden one; outputs past the number of workspaces get no screen
+- The X11 backend lists monitors with RandR 1.5 (the `randr` feature of `x11rb`), reports a new set of outputs when they change, and falls back to the whole root window as one output without RandR 1.5
+- Tests: a model-based property test over screen changes and output keys, unit tests for `set_outputs`, engine replays with two outputs (including a generated stream with changing outputs), and `monitors` integration tests that need `Xvfb`
+- The `minimal` example binds Super+, / Super+. (focus the previous / next monitor) and Super+Shift+, / Super+Shift+. (send the focused window there)
 
 ### Changed
+- `Engine::scene` now builds the scene for every screen, each in its own output's area, instead of one workspace on the first output; its focus is the focused screen's focused window
+- `StackSet::focus_tag` and `focus_window` give the focus to the screen that already shows the workspace, and otherwise replace the focused screen's workspace; `move_focused_to` and `insert_on` work on any workspace, shown or hidden
+- A floating window is placed relative to the area of its own output, and resizing uses the focused output
+- `StackSet::new` starts with one screen, for output 0, until `set_outputs` is called
 - `NextLayout` now cycles tile, monocle, grid, centered master; tile and centered master share one master ratio per workspace
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside

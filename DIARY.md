@@ -29,6 +29,7 @@
 | 2026-11-02 | X11 integration tests | Example WM on a private Xvfb, keys pressed through XTEST | ✅ Confirmed |
 | 2026-11-02 | Headless CI | `scripts/ci` requires Xvfb; a GitHub Actions workflow calls it | ✅ Confirmed |
 | 2026-11-02 | More layouts | Grid and centered master as new enum variants; one shared master ratio | ✅ Confirmed |
+| 2026-11-02 | Multi-output | One shared pool of workspaces; each output's screen shows one | ✅ Confirmed |
 
 ---
 
@@ -897,6 +898,45 @@ Centered master takes a ratio like tile, and the workspace keeps one ratio for b
 - Cycle order is tile, monocle, grid, centered master. The two existing tests that expected a two-step cycle were changed to the four-step one.
 - `tile.rs` keeps its own copy of the splitting arithmetic; it was left alone to keep the change small.
 - Property tests check, for both layouts, that cells cover the area exactly with no overlap, and that too-small areas fail with `AreaTooSmall`.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Multi-output: one shared pool of workspaces, each screen shows one
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The engine laid out one workspace on the first output the backend reported. Several monitors needed a decision on who owns the workspaces and what moving focus between outputs means.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. A `StackSet` per screen (dwm style) | `StackSet` untouched; per-monitor tags | A tag no longer names one workspace; unplugging must migrate windows by hand | M |
+| B. One shared pool, each screen shows one workspace (xmonad style) | One window on one workspace stays enforced in one type; unplugging cannot lose a window; tags stay unique | Large change to `StackSet` and its tests | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** B.
+
+Correctness decided it. A workspace is always either on exactly one screen or hidden, so a window cannot be lost or duplicated when an output goes away, and the model-based property test could be extended instead of replaced. Tags keep one meaning, so manage rules and `ViewTag` / `MoveToTag` needed no change. The cost was a bigger `StackSet`; A would be the pick if lucarne needs the same tag name independently on each monitor.
+
+#### Implementation Notes
+
+- `StackSet` keeps a zipper of screens (output id plus workspace) and a list of hidden workspaces. A workspace carries its position in the tag order, because where it is stored no longer says where it belongs. `workspaces()` and `tags()` still return tag order.
+- `set_outputs` rebuilds the screens from a copy and swaps the result in, so no early exit can leave a workspace out. A new output takes the workspaces of vanished outputs first, so replacing a monitor keeps its workspace; an empty report changes nothing, so a returning monitor finds the old layout of screens.
+- Viewing a workspace another screen shows moves the focus there instead of swapping the two (the xmonad rule).
+- The engine keeps the reported outputs and their areas; the screens in `StackSet` only know output ids. The scene stays a flat list of rectangles in global coordinates, so `diff` and the backends' scene code did not change.
+- X11 outputs are RandR 1.5 monitors, identified by their name atom, not RandR outputs: a monitor is what a user sees as one screen, and a server can define its own. Without RandR 1.5 the whole root window is output 0.
+- Not verified on a server: no `Xvfb` was available here, so the `monitors` integration tests are only compiled. A smoke test in Xephyr was inconclusive because its RandR cannot set monitors. It is also unknown whether `SetMonitor` produces a RandR notify event; the backend selects screen, output and CRTC changes to cover the likely cases.
 
 #### Review / Update Log
 

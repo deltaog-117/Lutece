@@ -28,6 +28,7 @@ Author: deltaog-117
 - ✅ Headless CI check – `scripts/ci` requires `Xvfb` and runs the check; a GitHub Actions workflow calls it
 - ✅ More layouts – `Grid` and `CenteredMaster` as separate modules; `NextLayout` cycles tile, monocle, grid, centered master, and the master ratio carries across tile and centered master
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
+- ✅ Multi-output support – `StackSet` keeps one shared pool of workspaces and each output's screen shows one of them; `Engine::scene` lays out every screen in its own area; `FocusNextOutput`, `FocusPrevOutput`, `SendToNextOutput` and `SendToPrevOutput` actions; unplugging a monitor hides its workspace instead of losing its windows; the X11 backend lists monitors through RandR 1.5 and follows changes
 
 ---
 
@@ -39,7 +40,7 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-- **Multi-output support** – several screens in the scene, with focus moving between them.
+- None at the moment.
 
 ---
 
@@ -60,5 +61,5 @@ Author: deltaog-117
 ## 🎯 Next Actions (Immediate)
 
 1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Run the integration tests once on a machine with `Xvfb`** – none was available while writing them, so they have only been compiled.
-3. **Multi-output support** – several screens in the scene, with focus moving between them.
+2. **Run the integration tests once on a machine with `Xvfb`** – none was available while writing them, so they have only been compiled. This includes the new `monitors` tests, which also settle whether Xvfb reports a monitor change as an event.
+3. **Documentation site** – guide on writing a WM with the library.

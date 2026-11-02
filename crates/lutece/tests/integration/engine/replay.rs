@@ -243,6 +243,17 @@ fn arbitrary_event() -> impl Strategy<Value = Event> {
         })),
         (100u32..2000, 100u32..2000).prop_map(|(width, height)| screen(width, height)),
         Just(Event::OutputsChanged(vec![])),
+        prop::collection::vec(0u32..4, 0..4).prop_map(|ids| {
+            let outputs = ids
+                .into_iter()
+                .map(|id| Output {
+                    id: OutputId::new(id),
+                    rect: Rect::new(i32::try_from(id).expect("small") * 1000, 0, 1000, 600)
+                        .expect("non-zero size"),
+                })
+                .collect();
+            Event::OutputsChanged(outputs)
+        }),
     ]
 }
 
@@ -277,16 +288,24 @@ proptest! {
 
             // The screen is large enough for every window, so the scene always builds.
             let scene = engine.scene().expect("the screen fits the windows");
-            let current: BTreeSet<u64> =
-                engine.stacks().current().windows().map(WinId::get).collect();
+            let shown: BTreeSet<u64> = engine
+                .stacks()
+                .screens()
+                .flat_map(|(_, ws)| ws.windows().map(WinId::get).collect::<Vec<_>>())
+                .collect();
             if model.has_screen {
-                prop_assert_eq!(scene.placements().iter().map(|p| p.id.get()).collect::<BTreeSet<_>>(), current);
+                prop_assert_eq!(scene.placements().iter().map(|p| p.id.get()).collect::<BTreeSet<_>>(), shown);
                 prop_assert_eq!(scene.focus(), engine.stacks().focused());
-                // Floating windows are always drawn above the tiled ones.
-                let workspace = engine.stacks().current();
-                let floating: Vec<bool> =
-                    scene.placements().iter().map(|p| workspace.is_floating(p.id)).collect();
-                prop_assert!(floating.windows(2).all(|pair| pair[0] <= pair[1]));
+                // On each screen, floating windows are drawn above the tiled ones.
+                for (_, workspace) in engine.stacks().screens() {
+                    let floating: Vec<bool> = scene
+                        .placements()
+                        .iter()
+                        .filter(|p| workspace.contains(p.id))
+                        .map(|p| workspace.is_floating(p.id))
+                        .collect();
+                    prop_assert!(floating.windows(2).all(|pair| pair[0] <= pair[1]));
+                }
             } else {
                 prop_assert!(scene.placements().is_empty());
             }
@@ -334,6 +353,10 @@ fn keymap() -> Keymap {
             key('r', Modifiers::SUPER),
             Action::ResizeFloat(Direction::Right),
         ),
+        (key('o', Modifiers::SUPER), Action::FocusNextOutput),
+        (key('p', Modifiers::SUPER), Action::FocusPrevOutput),
+        (key('o', shift), Action::SendToNextOutput),
+        (key('p', shift), Action::SendToPrevOutput),
     ];
     for (press, action) in binds {
         keymap.bind(press, action).expect("distinct bindings");
@@ -348,7 +371,7 @@ fn bound_engine() -> Engine {
 #[test]
 fn the_engine_lists_the_keys_to_grab() {
     let engine = bound_engine();
-    assert_eq!(engine.grabs().count(), 16);
+    assert_eq!(engine.grabs().count(), 20);
     assert_eq!(
         engine.grabs().next(),
         Some(key('q', Modifiers::SUPER | Modifiers::SHIFT))
@@ -682,4 +705,146 @@ fn resizing_before_a_screen_exists_changes_nothing() {
         scene(&engine).get(w(1)).map(|p| p.rect),
         rect(200, 120, 600, 360)
     );
+}
+
+fn output(id: u32, x: i32) -> Output {
+    Output {
+        id: OutputId::new(id),
+        rect: Rect::new(x, 0, 1000, 600).expect("non-zero size"),
+    }
+}
+
+/// Two side-by-side outputs, 1000x600 each, ids 0 and 1.
+fn two_outputs() -> Event {
+    Event::OutputsChanged(vec![output(0, 0), output(1, 1000)])
+}
+
+fn super_shift() -> Modifiers {
+    Modifiers::SUPER | Modifiers::SHIFT
+}
+
+/// Windows 1 and 2 on the first output's workspace, then 2 sent to the second output.
+fn split_engine() -> Engine {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [two_outputs(), open(1), open(2), pressed('o', super_shift())],
+    );
+    engine
+}
+
+#[test]
+fn each_output_shows_its_own_workspace_in_its_own_area() {
+    let engine = split_engine();
+
+    let scene = scene(&engine);
+    assert_eq!(scene.get(w(1)).map(|p| p.rect), rect(0, 0, 1000, 600));
+    assert_eq!(scene.get(w(2)).map(|p| p.rect), rect(1000, 0, 1000, 600));
+    // Sending a window away does not take the focus with it.
+    assert_eq!(scene.focus(), Some(w(1)));
+}
+
+#[test]
+fn the_output_keys_move_the_focus_and_wrap() {
+    let mut engine = split_engine();
+
+    replay(&mut engine, [pressed('o', Modifiers::SUPER)]);
+    assert_eq!(scene(&engine).focus(), Some(w(2)));
+    assert_eq!(engine.stacks().current_output(), OutputId::new(1));
+
+    replay(&mut engine, [pressed('o', Modifiers::SUPER)]);
+    assert_eq!(scene(&engine).focus(), Some(w(1)));
+
+    replay(&mut engine, [pressed('p', Modifiers::SUPER)]);
+    assert_eq!(scene(&engine).focus(), Some(w(2)));
+}
+
+#[test]
+fn a_new_window_opens_on_the_focused_outputs_workspace() {
+    let mut engine = split_engine();
+    replay(&mut engine, [pressed('o', Modifiers::SUPER), open(3)]);
+
+    let scene = scene(&engine);
+    assert_eq!(scene.focus(), Some(w(3)));
+    assert!(scene.get(w(3)).is_some_and(|p| p.rect.x() >= 1000));
+    assert_eq!(scene.get(w(1)).map(|p| p.rect), rect(0, 0, 1000, 600));
+}
+
+#[test]
+fn focusing_an_empty_output_leaves_no_focus() {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [two_outputs(), open(1), pressed('o', Modifiers::SUPER)],
+    );
+
+    let scene = scene(&engine);
+    assert_eq!(scene.focus(), None);
+    assert_eq!(ids(&scene), [1]);
+}
+
+#[test]
+fn a_focus_request_for_a_window_on_another_output_moves_the_focus_there() {
+    let mut engine = split_engine();
+    replay(&mut engine, [Event::FocusRequested(w(2))]);
+
+    assert_eq!(engine.stacks().current_output(), OutputId::new(1));
+    assert_eq!(scene(&engine).focus(), Some(w(2)));
+}
+
+#[test]
+fn an_unplugged_output_hides_its_windows_and_a_returning_one_shows_them_again() {
+    let mut engine = split_engine();
+
+    replay(&mut engine, [Event::OutputsChanged(vec![output(0, 0)])]);
+    assert_eq!(ids(&scene(&engine)), [1]);
+    assert!(engine.stacks().contains(w(2)));
+
+    replay(&mut engine, [two_outputs()]);
+    assert_eq!(
+        scene(&engine).get(w(2)).map(|p| p.rect),
+        rect(1000, 0, 1000, 600)
+    );
+}
+
+#[test]
+fn a_floating_window_is_placed_relative_to_its_own_output() {
+    let mut engine = split_engine();
+    replay(
+        &mut engine,
+        [
+            pressed('o', Modifiers::SUPER),
+            pressed('f', Modifiers::SUPER),
+        ],
+    );
+
+    assert_eq!(
+        scene(&engine).get(w(2)).map(|p| p.rect),
+        rect(1200, 120, 600, 360)
+    );
+}
+
+#[test]
+fn an_output_that_is_too_small_is_an_error_not_a_bad_scene() {
+    let mut engine = bound_engine();
+    let tiny = Output {
+        id: OutputId::new(1),
+        rect: Rect::new(1000, 0, 1, 1).expect("non-zero size"),
+    };
+    replay(
+        &mut engine,
+        [
+            Event::OutputsChanged(vec![output(0, 0), tiny]),
+            open(1),
+            open(2),
+            pressed('o', super_shift()),
+        ],
+    );
+    // One window fits a 1x1 output; two tiled windows do not.
+    assert!(engine.scene().is_ok());
+    replay(&mut engine, [pressed('o', super_shift())]);
+    assert!(matches!(
+        engine.scene(),
+        Err(Error::AreaTooSmall { windows: 2, .. })
+    ));
 }

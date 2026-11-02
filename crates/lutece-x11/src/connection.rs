@@ -3,9 +3,10 @@
 use crate::apply::{Flow, execute, plan, run_effects};
 use crate::error::{Error, Result};
 use crate::grabs::{Keyboard, grab_keys, regrab_keys};
+use crate::outputs;
 use crate::translate::{existing, key_press, translate};
 use crate::windows::Windows;
-use lutece::{Effect, Event, KeyPress, Output, OutputId, Rect, Scene, WindowInfo, diff};
+use lutece::{Effect, Event, KeyPress, Scene, WindowInfo, diff};
 use std::mem;
 use std::os::fd::{AsFd, BorrowedFd};
 use x11rb::connection::Connection;
@@ -40,6 +41,8 @@ const TEXT_PROPERTY_LEN: u32 = 256;
 pub struct X11Backend {
     conn: RustConnection,
     root: Window,
+    /// Whether the server lists monitors (RandR 1.5), to tell what to ask on a change.
+    monitors: bool,
     atoms: Atoms,
     keyboard: Keyboard,
     /// The key combinations grabbed so far, to grab again after a keyboard remap.
@@ -47,7 +50,7 @@ pub struct X11Backend {
     windows: Windows,
     /// What the X server is showing, so a new scene is applied as a difference.
     shown: Scene,
-    /// Events produced before the first X event, such as the screen size.
+    /// Events produced before the first X event, such as the monitors.
     queued: Vec<Event>,
 }
 
@@ -55,8 +58,10 @@ impl X11Backend {
     /// Connects to the display named by `DISPLAY` and becomes its window manager.
     ///
     /// Windows already on screen are taken over. The first call to
-    /// [`next_events`](Self::next_events) reports the screen, then those windows, bottom
-    /// of the stack first.
+    /// [`next_events`](Self::next_events) reports the monitors, then those windows, bottom
+    /// of the stack first. Each monitor is an output, and a change to them (a monitor
+    /// plugged in, removed or moved) is reported as a new set of outputs. A server
+    /// without RandR 1.5 has one output, the whole screen.
     ///
     /// # Errors
     ///
@@ -66,12 +71,6 @@ impl X11Backend {
         let (conn, screen_num) = RustConnection::connect(None)?;
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
-        let area = Rect::new(
-            0,
-            0,
-            u32::from(screen.width_in_pixels),
-            u32::from(screen.height_in_pixels),
-        )?;
         let atoms = Atoms::new(&conn)?.reply()?;
         let keyboard = Keyboard::fetch(&conn)?;
 
@@ -85,10 +84,10 @@ impl X11Backend {
         }
 
         let mut windows = Windows::default();
-        let mut queued = vec![Event::OutputsChanged(vec![Output {
-            id: OutputId::new(0),
-            rect: area,
-        }])];
+        let monitors = outputs::watch(&conn, root)?;
+        let mut queued = vec![Event::OutputsChanged(outputs::query(
+            &conn, root, monitors,
+        )?)];
         // Asked after the redirect is in place: a window that maps from now on sends a
         // map request, and one that mapped earlier is in this list, so none is missed.
         queued.extend(existing_windows(&conn, &atoms, root, &mut windows)?);
@@ -96,6 +95,7 @@ impl X11Backend {
         Ok(Self {
             conn,
             root,
+            monitors,
             atoms,
             keyboard,
             grabbed: Vec::new(),
@@ -192,6 +192,7 @@ impl X11Backend {
         let Self {
             conn,
             root,
+            monitors,
             atoms,
             keyboard,
             grabbed,
@@ -212,6 +213,17 @@ impl X11Backend {
                 *keyboard = Keyboard::fetch(conn)?;
                 regrab_keys(conn, keyboard, *root, grabbed)?;
             }
+            return Ok(());
+        }
+
+        if matches!(
+            event,
+            XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_)
+        ) {
+            // The core takes the complete new set, so a repeated report is harmless.
+            queued.push(Event::OutputsChanged(outputs::query(
+                conn, *root, *monitors,
+            )?));
             return Ok(());
         }
 

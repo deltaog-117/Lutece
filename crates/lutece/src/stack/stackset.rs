@@ -5,25 +5,40 @@ use super::workspace::Workspace;
 use crate::float::Float;
 use crate::layout::Layout;
 use crate::shared::error::{Error, Result};
-use crate::shared::ids::{Tag, WinId};
+use crate::shared::ids::{OutputId, Tag, WinId};
 use std::collections::HashSet;
 use std::iter;
 use std::mem;
 
-/// Every workspace, in tag order, with one of them current.
+/// A workspace on display at one output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Screen {
+    pub(super) output: OutputId,
+    pub(super) workspace: Workspace,
+}
+
+/// Every workspace, in tag order, shown on the screens or kept hidden.
 ///
-/// A window lives on exactly one workspace. At least one workspace always exists, so
-/// there is always a current one.
+/// Each screen shows one workspace and one of the screens has the focus; its workspace is
+/// the current one. A workspace is either on one screen or hidden, never both and never
+/// on two screens, and it stays in the set whatever happens to the screens, so a window
+/// lives on exactly one workspace and an unplugged monitor cannot lose it. There is
+/// always at least one workspace and one screen, so there is always a current workspace.
+///
+/// Until [`set_outputs`](StackSet::set_outputs) is called, the set has one screen, for
+/// output 0.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackSet {
-    before: Vec<Workspace>,
-    current: Workspace,
-    after: Vec<Workspace>,
+    pub(super) before: Vec<Screen>,
+    pub(super) current: Screen,
+    pub(super) after: Vec<Screen>,
+    pub(super) hidden: Vec<Workspace>,
 }
 
 impl StackSet {
-    /// Builds the set with one empty workspace per tag. The first tag is current. Every
-    /// workspace starts with the default layout.
+    /// Builds the set with one empty workspace per tag. The first tag is shown on the
+    /// first screen and current; the others are hidden. Every workspace starts with the
+    /// default layout.
     ///
     /// # Errors
     ///
@@ -44,18 +59,22 @@ impl StackSet {
     pub fn new<I: IntoIterator<Item = Tag>>(tags: I) -> Result<Self> {
         let mut seen = HashSet::new();
         let mut workspaces = Vec::new();
-        for tag in tags {
+        for (rank, tag) in tags.into_iter().enumerate() {
             if !seen.insert(tag.clone()) {
                 return Err(Error::DuplicateTag(tag));
             }
-            workspaces.push(Workspace::empty(tag, Layout::default()));
+            workspaces.push(Workspace::empty(tag, Layout::default(), rank));
         }
         let mut workspaces = workspaces.into_iter();
-        let current = workspaces.next().ok_or(Error::NoWorkspaces)?;
+        let first = workspaces.next().ok_or(Error::NoWorkspaces)?;
         Ok(Self {
             before: Vec::new(),
-            current,
-            after: workspaces.collect(),
+            current: Screen {
+                output: OutputId::new(0),
+                workspace: first,
+            },
+            after: Vec::new(),
+            hidden: workspaces.collect(),
         })
     }
 
@@ -66,31 +85,63 @@ impl StackSet {
         self
     }
 
-    /// The workspace on screen.
+    /// The workspace on the focused screen.
     #[must_use]
     pub fn current(&self) -> &Workspace {
-        &self.current
+        &self.current.workspace
+    }
+
+    /// The output of the focused screen.
+    #[must_use]
+    pub fn current_output(&self) -> OutputId {
+        self.current.output
     }
 
     /// The focused window of the current workspace.
     #[must_use]
     pub fn focused(&self) -> Option<WinId> {
-        self.current.focus()
+        self.current.workspace.focus()
     }
 
-    /// Every workspace, in tag order.
-    pub fn workspaces(&self) -> impl Iterator<Item = &Workspace> {
+    /// The screens in the order the backend reported their outputs, each with the
+    /// workspace it shows.
+    pub fn screens(&self) -> impl Iterator<Item = (OutputId, &Workspace)> {
+        self.screens_in_order()
+            .map(|screen| (screen.output, &screen.workspace))
+    }
+
+    fn screens_in_order(&self) -> impl Iterator<Item = &Screen> {
         self.before
             .iter()
             .chain(iter::once(&self.current))
             .chain(self.after.iter())
     }
 
+    /// Every workspace, in tag order, whether it is shown or hidden.
+    pub fn workspaces(&self) -> impl Iterator<Item = &Workspace> {
+        let mut all: Vec<&Workspace> = self
+            .screens_in_order()
+            .map(|screen| &screen.workspace)
+            .chain(self.hidden.iter())
+            .collect();
+        all.sort_by_key(|workspace| workspace.rank());
+        all.into_iter()
+    }
+
+    /// Every workspace in no particular order, for changes that do not depend on it.
     fn workspaces_mut(&mut self) -> impl Iterator<Item = &mut Workspace> {
         self.before
             .iter_mut()
             .chain(iter::once(&mut self.current))
             .chain(self.after.iter_mut())
+            .map(|screen| &mut screen.workspace)
+            .chain(self.hidden.iter_mut())
+    }
+
+    fn workspace_mut(&mut self, tag: &Tag) -> Result<&mut Workspace> {
+        self.workspaces_mut()
+            .find(|workspace| workspace.tag() == tag)
+            .ok_or_else(|| Error::UnknownTag(tag.clone()))
     }
 
     /// Every tag, in order.
@@ -121,7 +172,7 @@ impl StackSet {
         if self.contains(id) {
             return Err(Error::DuplicateWindow(id));
         }
-        self.current.insert(id);
+        self.current.workspace.insert(id);
         Ok(())
     }
 
@@ -136,11 +187,7 @@ impl StackSet {
         if self.contains(id) {
             return Err(Error::DuplicateWindow(id));
         }
-        let target = self.index_of_tag(tag)?;
-        // `target` came from `index_of_tag`, so the workspace exists.
-        if let Some(workspace) = self.workspaces_mut().nth(target) {
-            workspace.insert(id);
-        }
+        self.workspace_mut(tag)?.insert(id);
         Ok(())
     }
 
@@ -151,27 +198,29 @@ impl StackSet {
     /// Returns [`Error::DuplicateWindow`] if the window is already managed.
     pub(crate) fn insert_floating(&mut self, id: WinId) -> Result<()> {
         self.insert(id)?;
-        self.current.set_float(id, Some(Float::default()));
+        self.current.workspace.set_float(id, Some(Float::default()));
         Ok(())
     }
 
     /// Floats the focused window, or tiles it again if it floats. Does nothing on an
     /// empty workspace.
     pub fn toggle_float(&mut self) {
-        let Some(id) = self.current.focus() else {
+        let workspace = &mut self.current.workspace;
+        let Some(id) = workspace.focus() else {
             return;
         };
-        let float = (!self.current.is_floating(id)).then(Float::default);
-        self.current.set_float(id, float);
+        let float = (!workspace.is_floating(id)).then(Float::default);
+        workspace.set_float(id, float);
     }
 
     /// Changes the focused window's float state. Does nothing if it is tiled.
     pub(crate) fn update_focused_float(&mut self, change: impl FnOnce(Float) -> Float) {
-        let Some(id) = self.current.focus() else {
+        let workspace = &mut self.current.workspace;
+        let Some(id) = workspace.focus() else {
             return;
         };
-        if let Some(float) = self.current.float_of(id) {
-            self.current.set_float(id, Some(change(float)));
+        if let Some(float) = workspace.float_of(id) {
+            workspace.set_float(id, Some(change(float)));
         }
     }
 
@@ -189,113 +238,179 @@ impl StackSet {
         Ok(())
     }
 
-    /// Focuses `id`, switching to its workspace first if it is on another one.
+    /// Focuses `id`, going to its workspace first: the screen that shows it gets the
+    /// focus, or, if it is hidden, the focused screen shows it.
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownWindow`] if the window is not managed.
     pub fn focus_window(&mut self, id: WinId) -> Result<()> {
-        let index = self
-            .workspaces()
-            .position(|w| w.contains(id))
-            .ok_or(Error::UnknownWindow(id))?;
-        self.move_current_to(index);
-        self.current.focus_on(id);
+        let tag = self.tag_of(id).ok_or(Error::UnknownWindow(id))?.clone();
+        self.focus_tag(&tag)?;
+        self.current.workspace.focus_on(id);
         Ok(())
     }
 
     /// Focuses the next window on the current workspace, wrapping around.
     pub fn focus_next(&mut self) {
-        self.current.focus_next();
+        self.current.workspace.focus_next();
     }
 
     /// Focuses the previous window on the current workspace, wrapping around.
     pub fn focus_prev(&mut self) {
-        self.current.focus_prev();
+        self.current.workspace.focus_prev();
     }
 
     /// Swaps the focused window with the next one; the focus follows it.
     pub fn swap_next(&mut self) {
-        self.current.swap_next();
+        self.current.workspace.swap_next();
     }
 
     /// Swaps the focused window with the previous one; the focus follows it.
     pub fn swap_prev(&mut self) {
-        self.current.swap_prev();
+        self.current.workspace.swap_prev();
     }
 
     /// Switches the current workspace to its next layout, wrapping around.
     pub fn next_layout(&mut self) {
-        self.current.next_layout();
+        self.current.workspace.next_layout();
     }
 
     /// Moves the current workspace's master ratio by `delta` thousandths, if its layout
     /// has a master column.
     pub fn resize_master(&mut self, delta: i16) {
-        self.current.resize_master(delta);
+        self.current.workspace.resize_master(delta);
     }
 
-    /// Makes the workspace with this tag current.
+    /// Makes the workspace with this tag current. If another screen shows it, that screen
+    /// gets the focus and nothing else changes; if it is hidden, the focused screen
+    /// shows it and its old workspace is hidden.
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownTag`] if no workspace has the tag.
     pub fn focus_tag(&mut self, tag: &Tag) -> Result<()> {
-        let index = self.index_of_tag(tag)?;
-        self.move_current_to(index);
+        let shown = self.screens().position(|(_, w)| w.tag() == tag);
+        if let Some(index) = shown {
+            self.focus_screen(index);
+            return Ok(());
+        }
+        let slot = self
+            .hidden
+            .iter_mut()
+            .find(|w| w.tag() == tag)
+            .ok_or_else(|| Error::UnknownTag(tag.clone()))?;
+        mem::swap(&mut self.current.workspace, slot);
         Ok(())
     }
 
-    /// Makes the next workspace current, wrapping around.
+    /// Makes the next workspace in tag order current, wrapping around. See
+    /// [`focus_tag`](StackSet::focus_tag) for where it is shown.
     pub fn focus_next_tag(&mut self) {
-        let count = self.count();
-        self.move_current_to((self.before.len() + 1) % count);
+        self.step_tag(true);
     }
 
-    /// Makes the previous workspace current, wrapping around.
+    /// Makes the previous workspace in tag order current, wrapping around.
     pub fn focus_prev_tag(&mut self) {
-        let count = self.count();
-        self.move_current_to((self.before.len() + count - 1) % count);
+        self.step_tag(false);
     }
 
-    /// Sends the focused window to another workspace. The current workspace stays on
-    /// screen; the window becomes the focus of its new workspace. Does nothing if the
-    /// current workspace is empty or is the target.
+    /// Gives the focus to the next screen, wrapping around.
+    pub fn focus_next_output(&mut self) {
+        self.focus_screen(self.neighbour(true));
+    }
+
+    /// Gives the focus to the previous screen, wrapping around.
+    pub fn focus_prev_output(&mut self) {
+        self.focus_screen(self.neighbour(false));
+    }
+
+    /// Sends the focused window to the workspace the next screen shows, as
+    /// [`move_focused_to`](StackSet::move_focused_to) does. Does nothing with one screen.
+    pub fn send_focused_to_next_output(&mut self) {
+        self.send_focused_to_neighbour(true);
+    }
+
+    /// Sends the focused window to the workspace the previous screen shows.
+    pub fn send_focused_to_prev_output(&mut self) {
+        self.send_focused_to_neighbour(false);
+    }
+
+    /// Sends the focused window to another workspace, wherever that is shown. The
+    /// current workspace stays on screen; the window becomes the focus of its new
+    /// workspace. Does nothing if the current workspace is empty or is the target.
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownTag`] if no workspace has the tag.
     pub fn move_focused_to(&mut self, tag: &Tag) -> Result<()> {
-        let target = self.index_of_tag(tag)?;
-        if target == self.before.len() {
+        if !self.tags().any(|t| t == tag) {
+            return Err(Error::UnknownTag(tag.clone()));
+        }
+        if self.current.workspace.tag() == tag {
             return Ok(());
         }
-        let Some(id) = self.current.focus() else {
+        let Some(id) = self.current.workspace.focus() else {
             return Ok(());
         };
         // A window keeps floating, and where it was put, when it changes workspace.
-        let float = self.current.float_of(id);
-        self.current.remove(id);
-        // `target` came from `index_of_tag`, so the workspace exists.
-        if let Some(workspace) = self.workspaces_mut().nth(target) {
+        let float = self.current.workspace.float_of(id);
+        self.current.workspace.remove(id);
+        // The tag was checked above, so the workspace exists.
+        if let Ok(workspace) = self.workspace_mut(tag) {
             workspace.insert(id);
             workspace.set_float(id, float);
         }
         Ok(())
     }
 
-    fn count(&self) -> usize {
-        self.before.len() + 1 + self.after.len()
+    pub(super) fn workspace_count(&self) -> usize {
+        self.screens_in_order().count() + self.hidden.len()
     }
 
-    fn index_of_tag(&self, tag: &Tag) -> Result<usize> {
-        self.tags()
-            .position(|t| t == tag)
-            .ok_or_else(|| Error::UnknownTag(tag.clone()))
+    fn step_tag(&mut self, forward: bool) {
+        let count = self.workspace_count();
+        let here = self
+            .tags()
+            .position(|t| t == self.current.workspace.tag())
+            .unwrap_or(0);
+        let next = if forward {
+            (here + 1) % count
+        } else {
+            (here + count - 1) % count
+        };
+        let tag = self.tags().nth(next).cloned();
+        if let Some(tag) = tag {
+            // The tag came from the set, so it exists.
+            let _ = self.focus_tag(&tag);
+        }
     }
 
-    /// Makes the workspace at `target` current. An out-of-range index changes nothing.
-    fn move_current_to(&mut self, target: usize) {
+    /// The index of the screen after (or before) the focused one, wrapping around.
+    fn neighbour(&self, forward: bool) -> usize {
+        let count = self.screens_in_order().count();
+        let here = self.before.len();
+        if forward {
+            (here + 1) % count
+        } else {
+            (here + count - 1) % count
+        }
+    }
+
+    fn send_focused_to_neighbour(&mut self, forward: bool) {
+        let target = self.neighbour(forward);
+        let tag = self.screens().nth(target).map(|(_, w)| w.tag().clone());
+        if let Some(tag) = tag {
+            // The tag came from a screen, so it exists.
+            let _ = self.move_focused_to(&tag);
+        }
+    }
+
+    /// Gives the focus to the screen at `target`. An out-of-range index changes nothing.
+    fn focus_screen(&mut self, target: usize) {
+        if target >= self.screens_in_order().count() {
+            return;
+        }
         let here = self.before.len();
         if target < here {
             let mut moved = self.before.split_off(target).into_iter();
@@ -303,7 +418,7 @@ impl StackSet {
                 return;
             };
             let previous = mem::replace(&mut self.current, next_current);
-            let mut after: Vec<Workspace> = moved.collect();
+            let mut after: Vec<Screen> = moved.collect();
             after.push(previous);
             after.append(&mut self.after);
             self.after = after;
@@ -482,6 +597,78 @@ mod tests {
         assert_eq!(s.focused(), Some(w(2)));
     }
 
+    fn two_screens() -> StackSet {
+        let mut set = set();
+        set.set_outputs(&[OutputId::new(0), OutputId::new(1)]);
+        set
+    }
+
+    fn shown_on(set: &StackSet, output: u32) -> String {
+        set.screens()
+            .find(|(o, _)| o.get() == output)
+            .map(|(_, w)| w.tag().to_string())
+            .expect("the output has a screen")
+    }
+
+    #[test]
+    fn viewing_a_workspace_another_screen_shows_moves_the_focus_there() {
+        let mut s = two_screens();
+        s.focus_tag(&tag("2")).expect("tag exists");
+        assert_eq!(s.current_output(), OutputId::new(1));
+        assert_eq!(shown_on(&s, 0), "1");
+        assert_eq!(shown_on(&s, 1), "2");
+    }
+
+    #[test]
+    fn viewing_a_hidden_workspace_replaces_only_the_focused_screens() {
+        let mut s = two_screens();
+        s.focus_tag(&tag("3")).expect("tag exists");
+        assert_eq!(s.current_output(), OutputId::new(0));
+        assert_eq!(shown_on(&s, 0), "3");
+        assert_eq!(shown_on(&s, 1), "2");
+    }
+
+    #[test]
+    fn the_focus_wraps_round_the_outputs_in_both_directions() {
+        let mut s = two_screens();
+        s.focus_next_output();
+        assert_eq!(s.current_output(), OutputId::new(1));
+        s.focus_next_output();
+        assert_eq!(s.current_output(), OutputId::new(0));
+        s.focus_prev_output();
+        assert_eq!(s.current_output(), OutputId::new(1));
+    }
+
+    #[test]
+    fn sending_a_window_to_the_next_output_lands_on_that_screens_workspace() {
+        let mut s = two_screens();
+        s.insert(w(1)).expect("new window");
+        s.send_focused_to_next_output();
+        assert_eq!(s.tag_of(w(1)), Some(&tag("2")));
+        assert_eq!(s.current_output(), OutputId::new(0));
+        assert_eq!(s.focused(), None);
+    }
+
+    #[test]
+    fn with_one_screen_there_is_nowhere_to_send_a_window() {
+        let mut s = set();
+        s.insert(w(1)).expect("new window");
+        let before = s.clone();
+        s.send_focused_to_next_output();
+        s.focus_next_output();
+        assert_eq!(s, before);
+    }
+
+    #[test]
+    fn focusing_a_window_on_another_screen_moves_the_focus_to_that_screen() {
+        let mut s = two_screens();
+        s.insert_on(w(4), &tag("2")).expect("tag exists");
+        s.focus_window(w(4)).expect("window is managed");
+        assert_eq!(s.current_output(), OutputId::new(1));
+        assert_eq!(s.focused(), Some(w(4)));
+        assert_eq!(shown_on(&s, 0), "1");
+    }
+
     #[derive(Debug, Clone)]
     enum Op {
         Insert(u64),
@@ -495,6 +682,11 @@ mod tests {
         FocusPrevTag,
         FocusWindow(u64),
         MoveFocused(usize),
+        SetOutputs(Vec<u32>),
+        FocusNextOutput,
+        FocusPrevOutput,
+        SendToNextOutput,
+        SendToPrevOutput,
     }
 
     fn op_strategy() -> impl Strategy<Value = Op> {
@@ -510,7 +702,16 @@ mod tests {
             Just(Op::FocusPrevTag),
             (0u64..8).prop_map(Op::FocusWindow),
             (0usize..3).prop_map(Op::MoveFocused),
+            proptest::collection::vec(0u32..5, 0..6).prop_map(Op::SetOutputs),
+            Just(Op::FocusNextOutput),
+            Just(Op::FocusPrevOutput),
+            Just(Op::SendToNextOutput),
+            Just(Op::SendToPrevOutput),
         ]
+    }
+
+    fn shown_tags(set: &StackSet) -> Vec<(OutputId, Tag)> {
+        set.screens().map(|(o, w)| (o, w.tag().clone())).collect()
     }
 
     /// Applies `op`, mirrors it in a plain set of managed windows, and checks the
@@ -561,6 +762,86 @@ mod tests {
                     prop_assert_eq!(set.tag_of(id), Some(target));
                 }
             }
+            Op::SetOutputs(raw) => {
+                let outputs: Vec<OutputId> = raw.iter().map(|n| OutputId::new(*n)).collect();
+                let before = shown_tags(set);
+                let focused = set.current().tag().clone();
+                set.set_outputs(&outputs);
+                let after = shown_tags(set);
+                if outputs.is_empty() {
+                    prop_assert_eq!(&after, &before);
+                } else {
+                    // The first distinct outputs, as many as there are workspaces.
+                    let mut wanted: Vec<OutputId> = Vec::new();
+                    for output in outputs {
+                        if wanted.len() < all_tags.len() && !wanted.contains(&output) {
+                            wanted.push(output);
+                        }
+                    }
+                    prop_assert_eq!(after.iter().map(|(o, _)| *o).collect::<Vec<_>>(), wanted);
+                    // An output that stays keeps its workspace.
+                    for (output, tag) in &after {
+                        if let Some((_, old)) = before.iter().find(|(o, _)| o == output) {
+                            prop_assert_eq!(tag, old);
+                        }
+                    }
+                    // The focused workspace stays focused while some screen shows it.
+                    if after.iter().any(|(_, tag)| tag == &focused) {
+                        prop_assert_eq!(set.current().tag(), &focused);
+                    }
+                }
+            }
+            Op::FocusNextOutput | Op::FocusPrevOutput => {
+                let outputs: Vec<OutputId> = set.screens().map(|(o, _)| o).collect();
+                let here = outputs
+                    .iter()
+                    .position(|o| *o == set.current_output())
+                    .expect("the focused screen is listed");
+                let forward = matches!(op, Op::FocusNextOutput);
+                let expected = if forward {
+                    (here + 1) % outputs.len()
+                } else {
+                    (here + outputs.len() - 1) % outputs.len()
+                };
+                let screens = shown_tags(set);
+                if forward {
+                    set.focus_next_output();
+                } else {
+                    set.focus_prev_output();
+                }
+                prop_assert_eq!(set.current_output(), outputs[expected]);
+                // Only the focus moves: the screens show what they showed.
+                prop_assert_eq!(shown_tags(set), screens);
+            }
+            Op::SendToNextOutput | Op::SendToPrevOutput => {
+                let screens = shown_tags(set);
+                let here = set.current_output();
+                let target = {
+                    let at = screens
+                        .iter()
+                        .position(|(o, _)| *o == here)
+                        .expect("listed");
+                    let n = screens.len();
+                    let to = if matches!(op, Op::SendToNextOutput) {
+                        at + 1
+                    } else {
+                        at + n - 1
+                    };
+                    screens[to % n].1.clone()
+                };
+                let moving = set.focused();
+                if matches!(op, Op::SendToNextOutput) {
+                    set.send_focused_to_next_output();
+                } else {
+                    set.send_focused_to_prev_output();
+                }
+                // The screens and the focused screen stay as they were.
+                prop_assert_eq!(shown_tags(set), screens);
+                prop_assert_eq!(set.current_output(), here);
+                if let Some(id) = moving {
+                    prop_assert_eq!(set.tag_of(id), Some(&target));
+                }
+            }
         }
         Ok(())
     }
@@ -587,6 +868,16 @@ mod tests {
         // The tags never change or reorder, and the current one is among them.
         prop_assert_eq!(set.tags().cloned().collect::<Vec<_>>(), tags());
         prop_assert!(set.tags().any(|t| t == set.current().tag()));
+
+        // Each screen has its own output and its own workspace, and the focused screen
+        // is one of them.
+        let screens = shown_tags(set);
+        prop_assert!(!screens.is_empty() && screens.len() <= tags().len());
+        let outputs: HashSet<OutputId> = screens.iter().map(|(o, _)| *o).collect();
+        let shown: HashSet<&Tag> = screens.iter().map(|(_, t)| t).collect();
+        prop_assert_eq!(outputs.len(), screens.len());
+        prop_assert_eq!(shown.len(), screens.len());
+        prop_assert!(outputs.contains(&set.current_output()));
         Ok(())
     }
 
