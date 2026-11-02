@@ -6,4 +6,5 @@ mod outputs;
 mod pointer;
 mod popup;
 mod protocol;
+mod scale;
 mod support;

@@ -98,3 +98,94 @@ fn a_popup_near_the_edge_slides_back_onto_the_output() {
         Some((1000 - POPUP_SIZE.0, 20, POPUP_SIZE.0, POPUP_SIZE.1))
     );
 }
+
+/// Two tiled windows side by side, the one on the right mapped. Returns the backend, the
+/// engine, the client, the window on the right, the window on the left and the width of
+/// the one on the right.
+fn side_by_side() -> (
+    WaylandBackend,
+    lutece::Engine,
+    TestClient,
+    usize,
+    usize,
+    i32,
+) {
+    let mut backend = backend();
+    let mut engine = engine();
+    let (mut client, mut events) = TestClient::connect(&mut backend);
+    let first = client.open_window("one", "app");
+    let second = client.open_window("two", "app");
+    events.extend(client.settle(&mut backend));
+    let opened = drive(&mut engine, &mut backend, events);
+    client.settle(&mut backend);
+    let scene = engine.scene().expect("a valid scene");
+    let rect = |id| scene.get(id).expect("the window is on screen").rect;
+    // A new window becomes the master, so the older one is in the stack on the right.
+    let (right, left) = if rect(opened[0]).x() > rect(opened[1]).x() {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let place = rect(opened[usize::from(right == second)]);
+    let width = i32::try_from(place.width()).expect("fits");
+    assert!(place.x() > 0, "one window sits beside the other");
+    client.map_window(right, width, 300);
+    client.settle(&mut backend);
+    (backend, engine, client, right, left, width)
+}
+
+/// Opens and maps a popup asked for at `(x, 20)` in `window`.
+fn open_popup_at(
+    backend: &mut WaylandBackend,
+    client: &mut TestClient,
+    window: usize,
+    x: i32,
+) -> usize {
+    let popup = client.open_popup(window, (x, 20), POPUP_SIZE, false);
+    client.settle(backend);
+    client.map_popup(popup, POPUP_SIZE.0, POPUP_SIZE.1);
+    client.settle(backend);
+    popup
+}
+
+/// Closes `window` and lets the engine re-tile what is left.
+fn close_window(
+    backend: &mut WaylandBackend,
+    engine: &mut lutece::Engine,
+    client: &mut TestClient,
+    window: usize,
+) {
+    client.destroy_window(window);
+    let events = client.settle(backend);
+    drive(engine, backend, events);
+    client.settle(backend);
+}
+
+#[test]
+fn a_popup_put_in_the_wrong_place_by_a_window_move_is_dismissed() {
+    let (mut backend, mut engine, mut client, right, left, width) = side_by_side();
+    // Asked for 20 pixels before the window's right edge, which is the output's right
+    // edge too, so it slides back by 60.
+    let ask = width - 20;
+    let popup = open_popup_at(&mut backend, &mut client, right, ask);
+    assert_eq!(
+        client.popup(popup).configures.last().map(|c| c.0),
+        Some(ask - 60)
+    );
+    assert!(!client.popup(popup).done);
+
+    // This window now fills the output, and the slide no longer fits.
+    close_window(&mut backend, &mut engine, &mut client, left);
+
+    assert!(client.popup(popup).done);
+}
+
+#[test]
+fn a_popup_that_still_fits_after_its_window_moves_stays() {
+    let (mut backend, mut engine, mut client, right, left, _) = side_by_side();
+    let popup = open_popup_at(&mut backend, &mut client, right, 10);
+
+    close_window(&mut backend, &mut engine, &mut client, left);
+
+    assert!(!client.popup(popup).done);
+}

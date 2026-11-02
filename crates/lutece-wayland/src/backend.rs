@@ -4,16 +4,19 @@
 use crate::apply::{Flow, apply_changes, apply_effects};
 use crate::compositor::{ClientState, State};
 use crate::error::{Error, Result};
+use crate::render::SceneElement;
+use crate::scale::Scale;
 use lutece::{
     Effect, Event, KeyPress, Modifiers, Output, OutputId, Point as CorePoint, Rect, Scene, Size,
     diff,
 };
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use smithay::backend::input::{KeyState, Keycode};
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::{ImportAll, Renderer};
 use smithay::input::pointer::CursorImageStatus;
-use smithay::output::{Mode, Output as WlOutput, PhysicalProperties, Subpixel};
+use smithay::output::{
+    Mode, Output as WlOutput, PhysicalProperties, Scale as OutputScale, Subpixel,
+};
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::utils::Point;
@@ -65,6 +68,8 @@ pub struct WaylandBackend {
 /// An output clients can see, and the global that announces it to them.
 struct Screen {
     id: OutputId,
+    /// The area in logical pixels.
+    rect: Rect,
     output: WlOutput,
     global: GlobalId,
 }
@@ -117,6 +122,21 @@ impl WaylandBackend {
         Ok(())
     }
 
+    /// Sets how many physical pixels one logical pixel is on the screen the compositor
+    /// is shown on. The core's rectangles stay logical, so nothing there changes; clients
+    /// are told to draw that much finer: through `wp_fractional_scale` with the exact
+    /// value, and through `wl_output` with it rounded up. Outputs keep their logical area
+    /// and report the physical size that goes with it.
+    ///
+    /// Clients draw at the scale only if they ask for it by binding `wp_fractional_scale`;
+    /// others stay at 1 and are enlarged when drawn.
+    pub fn set_scale(&mut self, scale: Scale) {
+        self.state.set_scale(scale);
+        for screen in &self.screens {
+            show_area(&screen.output, screen.rect, scale);
+        }
+    }
+
     /// Makes `outputs` the complete set of outputs. One whose id is new appears to
     /// clients, one whose id is missing disappears (its windows are the core's to move),
     /// and one that stays takes the new area. The core hears of the new set on the next
@@ -130,9 +150,17 @@ impl WaylandBackend {
             }
             kept
         });
+        let scale = self.state.scale;
         for output in outputs {
-            match self.screens.iter().find(|screen| screen.id == output.id) {
-                Some(screen) => show_area(&screen.output, output.rect),
+            match self
+                .screens
+                .iter_mut()
+                .find(|screen| screen.id == output.id)
+            {
+                Some(screen) => {
+                    screen.rect = output.rect;
+                    show_area(&screen.output, output.rect, scale);
+                }
                 None => {
                     let wl_output = WlOutput::new(
                         format!("{SOCKET_BASE}-{}", output.id.get()),
@@ -143,10 +171,11 @@ impl WaylandBackend {
                             model: "virtual".to_owned(),
                         },
                     );
-                    show_area(&wl_output, output.rect);
+                    show_area(&wl_output, output.rect, scale);
                     let global = wl_output.create_global::<State>(&handle);
                     self.screens.push(Screen {
                         id: output.id,
+                        rect: output.rect,
                         output: wl_output,
                         global,
                     });
@@ -243,19 +272,16 @@ impl WaylandBackend {
     }
 
     /// What to draw for the managed windows, front to back.
-    pub(crate) fn surface_elements<R>(
-        &self,
-        renderer: &mut R,
-    ) -> Vec<WaylandSurfaceRenderElement<R>>
+    pub(crate) fn surface_elements<R>(&self, renderer: &mut R) -> Vec<SceneElement<R>>
     where
         R: Renderer + ImportAll,
         R::TextureId: Clone + 'static,
     {
-        crate::render::surface_elements(&self.state.windows, renderer)
+        crate::render::surface_elements(&self.state.windows, renderer, self.state.scale)
     }
 
     /// What to draw for a cursor image a client supplied, if it did.
-    pub(crate) fn cursor_elements<R>(&self, renderer: &mut R) -> Vec<WaylandSurfaceRenderElement<R>>
+    pub(crate) fn cursor_elements<R>(&self, renderer: &mut R) -> Vec<SceneElement<R>>
     where
         R: Renderer + ImportAll,
         R::TextureId: Clone + 'static,
@@ -264,6 +290,7 @@ impl WaylandBackend {
             &self.state.pointer.cursor,
             self.state.pointer.location,
             renderer,
+            self.state.scale,
         )
     }
 
@@ -306,13 +333,23 @@ impl WaylandBackend {
     }
 }
 
-/// Gives an output the mode and place of `rect`.
-fn show_area(output: &WlOutput, rect: Rect) {
+/// Gives an output the place of `rect` (logical pixels) and the mode that covers it at
+/// `scale`, which is how many physical pixels the screen has for it.
+fn show_area(output: &WlOutput, rect: Rect, scale: Scale) {
     let mode = Mode {
-        size: (to_protocol(rect.width()), to_protocol(rect.height())).into(),
+        size: (
+            scale.to_physical(to_protocol(rect.width())),
+            scale.to_physical(to_protocol(rect.height())),
+        )
+            .into(),
         refresh: REFRESH_MILLIHERTZ,
     };
-    output.change_current_state(Some(mode), None, None, Some((rect.x(), rect.y()).into()));
+    output.change_current_state(
+        Some(mode),
+        None,
+        Some(OutputScale::Fractional(scale.factor())),
+        Some((rect.x(), rect.y()).into()),
+    );
     output.set_preferred(mode);
 }
 

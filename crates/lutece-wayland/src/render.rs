@@ -1,11 +1,13 @@
 //! Drawing windows, their popups and the cursor, and telling clients when a frame was
 //! shown.
 
+use crate::scale::Scale;
 use crate::windows::Windows;
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
+use smithay::backend::renderer::element::utils::CropRenderElement;
+use smithay::backend::renderer::element::{Kind, render_elements};
 use smithay::backend::renderer::{ImportAll, Renderer};
 use smithay::input::pointer::{CursorImageAttributes, CursorImageStatus};
 use smithay::utils::{IsAlive, Logical, Point};
@@ -14,12 +16,25 @@ use smithay::wayland::compositor::{
 };
 use std::sync::Mutex;
 
+render_elements! {
+    /// One thing to draw: a surface as its client made it, or a window's surface cut to the
+    /// rectangle its window was given.
+    pub(crate) SceneElement<R> where R: ImportAll;
+    Surface=WaylandSurfaceRenderElement<R>,
+    Cropped=CropRenderElement<WaylandSurfaceRenderElement<R>>,
+}
+
 /// What to draw for every placed window and its popups, front to back, which is the
 /// order Smithay's drawing helpers expect. A hidden window is left out.
+///
+/// A window is drawn only inside the rectangle the core gave it, so a client that paints
+/// a shadow or a frame of its own around its window cannot spill over its neighbours.
+/// Popups are not cut, since a menu may reach past its window.
 pub(crate) fn surface_elements<R>(
     windows: &Windows,
     renderer: &mut R,
-) -> Vec<WaylandSurfaceRenderElement<R>>
+    scale: Scale,
+) -> Vec<SceneElement<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
@@ -28,14 +43,20 @@ where
         .layers()
         .into_iter()
         .flat_map(|layer| {
-            render_elements_from_surface_tree(
+            let drawn: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
                 renderer,
                 &layer.surface,
-                (layer.origin.x, layer.origin.y),
-                1.0,
+                scale.point_to_physical(layer.origin),
+                scale.factor(),
                 1.0,
                 Kind::Unspecified,
-            )
+            );
+            let clip = layer.clip.map(|clip| scale.rect_to_physical(clip));
+            drawn.into_iter().filter_map(move |element| match clip {
+                Some(clip) => CropRenderElement::from_element(element, scale.factor(), clip)
+                    .map(SceneElement::Cropped),
+                None => Some(SceneElement::Surface(element)),
+            })
         })
         .collect()
 }
@@ -46,7 +67,8 @@ pub(crate) fn cursor_elements<R>(
     status: &CursorImageStatus,
     location: Point<f64, Logical>,
     renderer: &mut R,
-) -> Vec<WaylandSurfaceRenderElement<R>>
+    scale: Scale,
+) -> Vec<SceneElement<R>>
 where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
@@ -69,8 +91,8 @@ where
     render_elements_from_surface_tree(
         renderer,
         surface,
-        (origin.x, origin.y),
-        1.0,
+        scale.point_to_physical(origin),
+        scale.factor(),
         1.0,
         Kind::Cursor,
     )

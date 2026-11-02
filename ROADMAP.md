@@ -38,6 +38,9 @@ Author: deltaog-117
 - ✅ Wayland popup placement – a popup's own slide, flip and resize rules are applied against the output of its parent window, when it opens and when it is repositioned, also for a menu opened from a menu
 - ✅ Wayland outputs – `WaylandBackend::set_outputs` takes the complete set of outputs (added, moved and removed ones become `wl_output` globals or lose them); `NestedBackend::open_with_outputs` cuts the window into several outputs side by side, so the multi-output actions can be tried on Wayland (`LUTECE_OUTPUTS=2` in the example)
 - ✅ Wayland popups and clipboard – popups (menus, tooltips) are placed where their client asks, drawn above their window, reachable by the pointer and dismissed by a click elsewhere when they grabbed it; copy and paste work between clients through the clipboard and the primary selection
+- ✅ Wayland host scale – `Scale` (a factor kept to a 120th) and `WaylandBackend::set_scale`; the core stays in logical pixels, clients that bind `wp_fractional_scale` are told the exact scale and size their buffers with `wp_viewporter`, `wl_output` says the scale rounded up with the physical mode, and the nested window follows the host's scale and its changes
+- ✅ Wayland shadows – a window's surface (subsurfaces included) is cut to the rectangle the core gave it, so a client that draws a shadow or frame of its own cannot paint over its neighbours; popups are not cut
+- ✅ Popups and window moves – a popup follows its window by itself; when a move leaves it somewhere its positioner rules would not put it (a menu slid back from an edge, or one that now leaves the output) it is dismissed, since the protocol lets a compositor place a popup only when it opens or its client asks
 
 ---
 
@@ -50,9 +53,7 @@ Author: deltaog-117
 ## 🟡 Medium Priority (Important)
 
 - **Wayland buffer sharing** – `linux-dmabuf` so GPU-rendered clients do not fall back to shared memory.
-- **Wayland host scale** – follow the scale factor of the window the nested backend runs in; today every output is drawn at scale 1.
-- **Wayland shadows** – clip a client's surface to its declared geometry, so a client that ignores `xdg-decoration` and draws a shadow does not paint over its neighbours.
-- **Popups that follow their window** – an open popup keeps the position it was given when its window moves (a floating drag), so it can leave the output until it is reopened.
+- **Scale for clients without fractional scale** – tell each surface which output it is on (`wl_surface.enter`), so clients that read `wl_output.scale` instead of `wp_fractional_scale` draw sharp too; today they stay at 1 and are enlarged when drawn.
 
 ---
 
@@ -72,7 +73,7 @@ Author: deltaog-117
 
 ## 🎯 Next Actions (Immediate)
 
-1. **Look at the nested Wayland WM** – run `cargo run -p lutece-wayland --example minimal` (and with `LUTECE_OUTPUTS=2`) and confirm by eye that windows are drawn, tiled and follow the keys, that the pointer focuses windows, that Alt+drag moves a floating window (Alt+f first), that a menu opens, closes and stays on its output, that Alacritty draws no title bar of its own, that Alt+, and Alt+. move between the two outputs, and that copy and paste work between two terminals; none of this has been seen on screen yet (only tested with a scripted client).
+1. **Look at the nested Wayland WM** – run `cargo run -p lutece-wayland --example minimal` (and with `LUTECE_OUTPUTS=2`) and confirm by eye that windows are drawn, tiled and follow the keys, that the pointer focuses windows, that Alt+drag moves a floating window (Alt+f first), that a menu opens, closes and stays on its output, that Alacritty draws no title bar of its own, that a client with a shadow (a GTK window) does not paint over its neighbour, that Alt+, and Alt+. move between the two outputs, that copy and paste work between two terminals, and that on a host at a scale other than 1 (try 1.5) windows have the size you expect and text in Alacritty or a GTK 4 app is sharp; none of this has been seen on screen yet (only tested with a scripted client).
 2. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
 3. **Run the X11 integration tests once on a machine with `Xvfb`** – none was available while writing them, so they have only been compiled. This includes the `monitors` tests, which also settle whether Xvfb reports a monitor change as an event. Add a test there that drags a floating window with XTEST button presses; the X11 drag code is covered only by unit tests so far.
 4. **Documentation site** – guide on writing a WM with the library.

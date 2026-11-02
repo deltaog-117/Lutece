@@ -16,6 +16,7 @@ use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_client::protocol::wl_data_source::{self, WlDataSource};
 use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
+use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
@@ -25,6 +26,12 @@ use wayland_client::protocol::{wl_compositor::WlCompositor, wl_surface::WlSurfac
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop, event_created_child,
 };
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
+    self, WpFractionalScaleV1,
+};
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
+use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::{
     self, Mode, ZxdgToplevelDecorationV1,
@@ -50,10 +57,14 @@ pub struct Window {
     pub closed: bool,
     /// The decoration mode the compositor last announced, if it announced one.
     pub decoration_mode: Option<Mode>,
+    /// The scale the compositor last preferred for the window, in 120ths, if it said.
+    pub preferred_scale: Option<u32>,
     xdg: Option<XdgSurface>,
     toplevel: Option<XdgToplevel>,
     surface: Option<WlSurface>,
     decoration: Option<ZxdgToplevelDecorationV1>,
+    fractional_scale: Option<WpFractionalScaleV1>,
+    viewport: Option<WpViewport>,
 }
 
 /// What the client saw happen to one of its popups.
@@ -78,6 +89,13 @@ struct Observed {
     shm: Option<WlShm>,
     data_manager: Option<WlDataDeviceManager>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
+    fractional_manager: Option<WpFractionalScaleManagerV1>,
+    viewporter: Option<WpViewporter>,
+    /// The first `wl_output`, bound to see what it says about the screen.
+    output: Option<WlOutput>,
+    /// The scale and the mode size in pixels the bound output last announced.
+    output_scale: Option<i32>,
+    output_mode: Option<(i32, i32)>,
     /// The registry names of the `wl_output` globals that are currently offered.
     output_globals: Vec<u32>,
     keyboard: Option<WlKeyboard>,
@@ -193,6 +211,51 @@ impl TestClient {
     /// How many `wl_output` globals the compositor offers now.
     pub fn output_count(&self) -> usize {
         self.observed.output_globals.len()
+    }
+
+    /// Asks for the scale the compositor prefers for a window, so it is told when it changes.
+    pub fn watch_fractional_scale(&mut self, index: usize) {
+        let qh = self.queue.handle();
+        let manager = self
+            .observed
+            .fractional_manager
+            .as_ref()
+            .expect("wp_fractional_scale_manager_v1 bound");
+        let window = &mut self.observed.windows[index];
+        let surface = window.surface.as_ref().expect("the window is alive");
+        window.fractional_scale = Some(manager.get_fractional_scale(surface, &qh, index));
+    }
+
+    /// Sizes a window on screen to `width` x `height` logical pixels whatever its buffer is,
+    /// as a client drawing at a fractional scale does.
+    pub fn set_viewport_destination(&mut self, index: usize, width: i32, height: i32) {
+        let qh = self.queue.handle();
+        let viewporter = self
+            .observed
+            .viewporter
+            .as_ref()
+            .expect("wp_viewporter bound");
+        let window = &mut self.observed.windows[index];
+        let surface = window.surface.as_ref().expect("the window is alive");
+        let viewport = viewporter.get_viewport(surface, &qh, ());
+        viewport.set_destination(width, height);
+        surface.commit();
+        window.viewport = Some(viewport);
+    }
+
+    /// Whether the compositor offers `wp_viewporter`.
+    pub fn has_viewporter(&self) -> bool {
+        self.observed.viewporter.is_some()
+    }
+
+    /// The integer scale the first output announced.
+    pub fn output_scale(&self) -> Option<i32> {
+        self.observed.output_scale
+    }
+
+    /// The size in pixels of the mode the first output announced.
+    pub fn output_mode(&self) -> Option<(i32, i32)> {
+        self.observed.output_mode
     }
 
     /// Gives a window a buffer of `width` x `height` pixels, so it has a size on screen
@@ -445,7 +508,16 @@ impl Dispatch<WlRegistry, ()> for Observed {
             "zxdg_decoration_manager_v1" => {
                 state.decoration_manager = Some(registry.bind(name, 1, qh, ()));
             }
-            "wl_output" => state.output_globals.push(name),
+            "wp_fractional_scale_manager_v1" => {
+                state.fractional_manager = Some(registry.bind(name, 1, qh, ()));
+            }
+            "wp_viewporter" => state.viewporter = Some(registry.bind(name, 1, qh, ())),
+            "wl_output" => {
+                if state.output.is_none() {
+                    state.output = Some(registry.bind(name, version.min(3), qh, ()));
+                }
+                state.output_globals.push(name);
+            }
             _ => {}
         }
     }
@@ -713,6 +785,48 @@ delegate_noop!(Observed: ignore WlShmPool);
 delegate_noop!(Observed: ignore WlDataDeviceManager);
 delegate_noop!(Observed: ignore XdgPositioner);
 delegate_noop!(Observed: ignore ZxdgDecorationManagerV1);
+delegate_noop!(Observed: ignore WpFractionalScaleManagerV1);
+delegate_noop!(Observed: ignore WpViewporter);
+delegate_noop!(Observed: ignore WpViewport);
+
+impl Dispatch<WlOutput, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &WlOutput,
+        event: wl_output::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_output::Event::Scale { factor } => state.output_scale = Some(factor),
+            wl_output::Event::Mode {
+                flags: WEnum::Value(flags),
+                width,
+                height,
+                ..
+            } if flags.contains(wl_output::Mode::Current) => {
+                state.output_mode = Some((width, height));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, usize> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        index: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            state.windows[*index].preferred_scale = Some(scale);
+        }
+    }
+}
 
 /// An engine with one workspace.
 pub fn engine() -> Engine {

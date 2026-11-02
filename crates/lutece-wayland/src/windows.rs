@@ -7,7 +7,7 @@
 use lutece::{Rect, WinId};
 use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
 use std::collections::HashMap;
@@ -28,6 +28,9 @@ pub(crate) struct Layer {
     /// Where the surface's own origin is on the output.
     pub(crate) origin: Point<i32, Logical>,
     pub(crate) popup: bool,
+    /// The area of the output the surface may paint on, `None` for no limit. A window
+    /// is held to the rectangle the core gave it; a popup may reach past its window.
+    pub(crate) clip: Option<Rectangle<i32, Logical>>,
 }
 
 /// Every toplevel this backend knows about.
@@ -80,6 +83,15 @@ impl Windows {
     /// The managed window with this id, for changing.
     pub(crate) fn get_mut(&mut self, id: WinId) -> Option<&mut Entry> {
         self.managed.get_mut(&id)
+    }
+
+    /// Every toplevel surface, announced or not.
+    pub(crate) fn toplevel_surfaces(&self) -> Vec<WlSurface> {
+        self.pending
+            .iter()
+            .chain(self.managed.values().map(|entry| &entry.toplevel))
+            .map(|toplevel| toplevel.wl_surface().clone())
+            .collect()
     }
 
     /// All managed windows.
@@ -140,6 +152,7 @@ impl Windows {
                         surface: popup.wl_surface().clone(),
                         origin: origin + location - popup.geometry().loc,
                         popup: true,
+                        clip: None,
                     })
                     .collect();
                 layers.reverse();
@@ -148,11 +161,22 @@ impl Windows {
                     surface: root.clone(),
                     origin: surface_origin,
                     popup: false,
+                    clip: Some(placed_area(rect)),
                 });
                 layers
             })
             .collect()
     }
+}
+
+/// The area the core gave a window, which is all its client may paint on. A size beyond
+/// `i32` is clamped, far past any real screen.
+fn placed_area(rect: Rect) -> Rectangle<i32, Logical> {
+    let length = |pixels: u32| i32::try_from(pixels).unwrap_or(i32::MAX);
+    Rectangle::new(
+        (rect.x(), rect.y()).into(),
+        (length(rect.width()), length(rect.height())).into(),
+    )
 }
 
 /// Where the window geometry the client declared starts inside its surface; the surface's
@@ -167,4 +191,24 @@ fn geometry_origin(toplevel: &ToplevelSurface) -> Point<i32, Logical> {
     })
     .map(|geometry| geometry.loc)
     .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_window_may_paint_only_on_the_area_it_was_given() {
+        let rect = Rect::new(-5, 6, 100, 50).expect("a non-empty rectangle");
+        assert_eq!(
+            placed_area(rect),
+            Rectangle::new((-5, 6).into(), (100, 50).into())
+        );
+    }
+
+    #[test]
+    fn an_enormous_area_is_clamped_not_wrapped() {
+        let rect = Rect::new(0, 0, u32::MAX, 1).expect("a non-empty rectangle");
+        assert_eq!(placed_area(rect).size, (i32::MAX, 1).into());
+    }
 }

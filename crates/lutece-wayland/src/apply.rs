@@ -51,6 +51,7 @@ fn place(state: &mut State, placement: &Placement) {
         .toplevel
         .with_pending_state(|pending| pending.size = Some(size.into()));
     entry.toplevel.send_pending_configure();
+    state.dismiss_misplaced_popups(placement.id);
 }
 
 /// Protocol sizes are signed; a size beyond `i32` is clamped, far past any real screen.

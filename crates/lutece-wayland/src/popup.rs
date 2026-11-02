@@ -5,8 +5,10 @@
 //! parent's rectangle, so the output is expressed in the same terms.
 
 use crate::compositor::State;
-use lutece::Rect;
-use smithay::desktop::{find_popup_root_surface, get_popup_toplevel_coords};
+use lutece::{Rect, WinId};
+use smithay::desktop::{
+    PopupKind, PopupManager, find_popup_root_surface, get_popup_toplevel_coords,
+};
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::shell::xdg::{PopupSurface, PositionerState};
 
@@ -32,9 +34,8 @@ impl State {
     /// Where `popup` goes, relative to its parent: what its positioner asks, moved by the
     /// positioner's own adjustments (slide, flip, resize) to stay on the output.
     ///
-    /// The position is fixed here, so a window that moves later (a floating drag) takes
-    /// its open popups along without keeping them on the output. A popup whose window is
-    /// not placed keeps the position it asked for.
+    /// A popup whose window is not placed keeps the position it asked for. When the window
+    /// moves later, [`dismiss_misplaced_popups`](Self::dismiss_misplaced_popups) closes the ones the move put in the wrong place.
     pub(crate) fn popup_geometry(
         &self,
         popup: &PopupSurface,
@@ -43,6 +44,45 @@ impl State {
         match self.popup_target(popup) {
             Some(target) => (*positioner).get_unconstrained_geometry(target),
             None => positioner.get_geometry(),
+        }
+    }
+
+    /// Dismisses the open popups of window `id` that no longer sit where their rules put
+    /// them, after the window moved (a floating drag, a new layout).
+    ///
+    /// A popup follows its window by itself, but its position was worked out against
+    /// the output at the old place: a menu slid back from the edge now hangs in the
+    /// air, and one that fitted may now leave the output. The protocol lets a compositor
+    /// configure a popup only when it opens or when its client asks for a new
+    /// position, so the way to keep a popup off the wrong place is to close it, as a
+    /// menu closes when its window is dragged. A popup that has not had its first
+    /// configure yet is simply given the new place.
+    pub(crate) fn dismiss_misplaced_popups(&mut self, id: WinId) {
+        let Some(root) = self
+            .windows
+            .get(id)
+            .map(|entry| entry.toplevel.wl_surface().clone())
+        else {
+            return;
+        };
+        let popups: Vec<_> = PopupManager::popups_for_surface(&root)
+            .filter_map(|(kind, _)| match kind {
+                PopupKind::Xdg(popup) => Some(popup),
+                PopupKind::InputMethod(_) => None,
+            })
+            .collect();
+        for popup in popups {
+            let positioner = popup.with_pending_state(|state| state.positioner);
+            let geometry = self.popup_geometry(&popup, &positioner);
+            let moved = popup.with_pending_state(|state| {
+                std::mem::replace(&mut state.geometry, geometry) != geometry
+            });
+            if moved && popup.is_initial_configure_sent() {
+                popup.send_popup_done();
+                self.pointer
+                    .grabbed_popups
+                    .retain(|grabbed| grabbed != &popup);
+            }
         }
     }
 

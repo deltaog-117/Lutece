@@ -33,6 +33,7 @@
 | 2026-11-02 | Wayland backend | Smithay compositor the caller drives; spike, then headless protocol tests, then a nested window | ✅ Confirmed |
 | 2026-11-02 | Pointer drags | One core event, `FloatAdjusted`, for pointer drags; focus stays in the backend | ✅ Confirmed |
 | 2026-11-02 | Wayland outputs | A set of outputs on the backend; the nested window is cut into virtual monitors | ✅ Confirmed |
+| 2026-11-02 | Wayland host scale | Fractional scale in 120ths: logical core, `wp_fractional_scale` and `wp_viewporter` for clients | ✅ Confirmed |
 
 ---
 
@@ -1071,6 +1072,48 @@ A and B both need the backend to hold a list of outputs, and A adds only the cut
 - **X11 drags:** the buttons are grabbed on the root with the modifier (and CapsLock/NumLock variants), so the click never reaches the window. Unlike Wayland there is no default modifier: the grab can fail when another client holds it, so `set_drag_modifier` is explicit and returns an error.
 - **Not verified:** none of this has been seen on screen. The nested example with several outputs, decorations in Alacritty, a popup near an edge and X11 drags in Xephyr are checked only by scripted clients and unit tests. The X11 drag path has no integration test, because `Xvfb` is not installed here.
 - **Not done:** host scale changes (every output draws at scale 1), clipping a client's shadow to its geometry, and re-constraining popups when their window moves.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Wayland host scale: fractional scale in 120ths, logical pixels in the core
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The nested window may be shown at a scale other than 1, and every output was drawn at scale 1. The same cycle clipped a client's shadow to its window and dealt with popups when their window moves; those had one credible approach each (Smithay's crop element for the shadow), only the scale needed a choice.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Whole-number scale | Sharp; small change | Wrong size on 1.25 or 1.5 hosts | M |
+| B. Fractional scale and viewporter | Sharp and exact at any scale | Two new protocols; part visible only on screen | H |
+| C. Stretch the finished frame | Smallest change | Blurry; to be redone later | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** B.
+
+The roadmap item says to follow the host's scale, and only B does so at every factor. A would be wrong on exactly the fractional hosts that need this most. The core and the toplevel configure sizes stay in logical pixels, which is what xdg-shell uses, so no layout code changed.
+
+#### Implementation Notes
+
+- **`Scale` is a count of 120ths in a non-zero integer**, the protocol's own resolution, so it is never zero, negative or not a number, compares exactly, and the value drawn is the value sent. All pixel conversions are integer arithmetic rounding half up. A rectangle is converted edge by edge so rectangles that touch still touch.
+- **Where the scale is applied:** `wl_output` gets the physical mode (logical size times the scale) and the scale rounded up, with the location staying logical; the renderer gets the scale and the physical position of every surface; the nested window divides the host's pixels by the scale for the output size and the pointer.
+- **Clients that do not bind `wp_fractional_scale`** stay at scale 1 and are enlarged when drawn. The compositor is at version 5 and sends no `wl_surface.enter`, so `wl_output.scale` alone does not reach them; listed in the roadmap.
+- **Shadows:** a window's surface tree is cropped to the placed rectangle (not the declared geometry): it is the same for a client that honours its size, and it also holds back one that ignores it. Popups are not cropped. Cropping is Smithay's `CropRenderElement`; the draw list now holds an enum of plain and cropped elements.
+- **Popups:** the first plan was to place a popup again when its window moved. The protocol does not allow it: a compositor may configure a popup only when it opens or after the client's reposition request, and Smithay refuses the configure (`AlreadyConfigured`). A popup now follows its window as before, and one whose placement would differ after the move is dismissed, like a menu that closes when its window is dragged. A popup of a popup is judged from where its parent popup was acknowledged to be.
+- **Tests:** unit and property tests for the scale; protocol tests with a real client for the preferred scale (at binding and after a change), the output's scale and physical mode, the viewport, and popup dismissal. The crop and the drawing at a scale cannot be tested without a GPU.
+- **Not verified:** none of the drawing has been seen on screen: the crop of a real shadow, text sharpness at 1.5 and the pointer position on a scaled host.
+- **Not done:** `wl_surface.enter` for clients without fractional scale; moving a popup when its window moves (not possible); `linux-dmabuf`.
 
 #### Review / Update Log
 

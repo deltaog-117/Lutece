@@ -91,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland`: several outputs. `WaylandBackend::set_outputs` takes the complete set; a new id gets a `wl_output` global, a missing id loses it and a kept id takes its new area. The core hears a pending set only once, as the latest
 - `NestedBackend::open_with_outputs` cuts the window into outputs of equal width side by side; they follow the window when it is resized. The example reads `LUTECE_OUTPUTS` and binds Alt+, Alt+. and their Shift variants for moving between outputs
 - Tests: a property test that dragged steps add up to the pointer's displacement, a property test that the nested outputs tile the window, a property test for the popup target, and Wayland integration tests for decoration negotiation, geometry offsets, a popup sliding back onto the output and outputs added, moved and removed
+- `Scale` and `WaylandBackend::set_scale`: the Wayland backend can tell clients how many physical pixels a logical pixel is; it offers `wp_fractional_scale` and `wp_viewporter`, and an output announces the scale rounded up and the physical mode that covers its logical area
+- `NestedBackend` follows the scale factor of the host window, and its changes, and measures outputs and the pointer in logical pixels
+- The Wayland backend cuts each window's surface to the rectangle the core gave the window, so a client's shadow or frame does not paint over a neighbouring window
+- Property tests for the scale (a length survives a trip to physical and back at any scale of 1 or more; touching rectangles still touch) and protocol tests with a real client for the scale, the output and the viewport
 
 ### Changed
 - `Engine::scene` now builds the scene for every screen, each in its own output's area, instead of one workspace on the first output; its focus is the focused screen's focused window
@@ -101,3 +105,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with
 - `WaylandBackend::set_output_size` is now the one-output form of `set_outputs`: it removes any other output
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside
+- A popup whose window moves is dismissed when its positioner rules would now put it elsewhere (a menu slid back from an edge, or one that would leave the output); other popups follow their window

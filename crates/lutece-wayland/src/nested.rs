@@ -7,6 +7,7 @@
 use crate::apply::Flow;
 use crate::backend::{ButtonAction, KeyAction, WaylandBackend};
 use crate::error::{Error, Result};
+use crate::scale::Scale;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, ButtonState, Event as _, InputEvent, KeyState, KeyboardKeyEvent,
@@ -41,6 +42,8 @@ pub struct NestedBackend {
     closed: bool,
     /// How many outputs the window is cut into.
     outputs: NonZeroU32,
+    /// How many of the window's pixels one logical pixel takes, as the host reports it.
+    scale: Scale,
     /// The cursor last given to the window, so it is changed only when it differs.
     shown_cursor: Option<CursorImageStatus>,
 }
@@ -77,7 +80,9 @@ const V120_PER_NOTCH: f64 = 120.0;
 
 impl NestedBackend {
     /// Opens the window and starts listening for clients. The output is as large as the
-    /// window and follows it when it is resized.
+    /// window and follows it when it is resized. It is measured in logical pixels: the
+    /// window's pixels divided by the scale the host shows the window at, which is also
+    /// followed when it changes.
     ///
     /// # Errors
     ///
@@ -98,8 +103,10 @@ impl NestedBackend {
     /// or the compositor cannot start.
     pub fn open_with_outputs(outputs: NonZeroU32) -> Result<Self> {
         let (graphics, window) = winit::init::<GlesRenderer>()?;
-        let size = size_of(graphics.window_size())?;
+        let scale = Scale::from_factor(graphics.scale_factor()).unwrap_or_default();
+        let size = size_of(graphics.window_size(), scale)?;
         let mut wayland = WaylandBackend::bind(size)?;
+        wayland.set_scale(scale);
         wayland.set_outputs(&split(size, outputs));
         Ok(Self {
             wayland,
@@ -108,6 +115,7 @@ impl NestedBackend {
             started: Instant::now(),
             closed: false,
             outputs,
+            scale,
             shown_cursor: None,
         })
     }
@@ -145,17 +153,26 @@ impl NestedBackend {
         let mut inputs = Vec::new();
         let mut resized = None;
         let mut closed = false;
+        // The pointer is measured in logical pixels, like everything the core sees.
         let window_size = self.graphics.window_size();
+        let (width, height) = (
+            self.scale.to_logical(window_size.w),
+            self.scale.to_logical(window_size.h),
+        );
         let status = self.window.dispatch_new_events(|event| match event {
-            WinitEvent::Resized { size, .. } => resized = Some(size),
+            WinitEvent::Resized { size, scale_factor } => resized = Some((size, scale_factor)),
             WinitEvent::CloseRequested => closed = true,
-            WinitEvent::Input(input) => inputs.extend(collect(input, window_size.w, window_size.h)),
+            WinitEvent::Input(input) => inputs.extend(collect(input, width, height)),
             _ => {}
         });
         self.closed |= closed || matches!(status, PumpStatus::Exit(_));
-        if let Some(size) = resized {
+        if let Some((size, factor)) = resized {
+            if let Some(scale) = Scale::from_factor(factor) {
+                self.scale = scale;
+                self.wayland.set_scale(scale);
+            }
             self.wayland
-                .set_outputs(&split(size_of(size)?, self.outputs));
+                .set_outputs(&split(size_of(size, self.scale)?, self.outputs));
         }
 
         let mut events = Vec::new();
@@ -226,8 +243,13 @@ impl NestedBackend {
                 .render(&mut framebuffer, size, Transform::Normal)
                 .map_err(render_error)?;
             frame.clear(BACKGROUND, &whole).map_err(render_error)?;
-            draw_render_elements::<GlesRenderer, _, _>(&mut frame, 1.0, &elements, &whole)
-                .map_err(render_error)?;
+            draw_render_elements::<GlesRenderer, _, _>(
+                &mut frame,
+                self.scale.factor(),
+                &elements,
+                &whole,
+            )
+            .map_err(render_error)?;
             // Swapping buffers below already orders the GPU work, so the fence is not awaited.
             let _fence = frame.finish().map_err(render_error)?;
         }
@@ -332,9 +354,13 @@ fn split(size: Size, count: NonZeroU32) -> Vec<Output> {
         .collect()
 }
 
-/// The core size for a window size in pixels.
-fn size_of(size: smithay::utils::Size<i32, smithay::utils::Physical>) -> Result<Size> {
-    let positive = |length: i32| u32::try_from(length).unwrap_or(0);
+/// The core size, in logical pixels, for a window of `size` physical pixels shown at
+/// `scale`.
+fn size_of(
+    size: smithay::utils::Size<i32, smithay::utils::Physical>,
+    scale: Scale,
+) -> Result<Size> {
+    let positive = |length: i32| u32::try_from(scale.to_logical(length)).unwrap_or(0);
     Ok(Size::new(positive(size.w), positive(size.h))?)
 }
 

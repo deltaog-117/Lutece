@@ -5,6 +5,7 @@
 //! every later size or focus decision arrives from the core as a scene.
 
 use crate::pointer::PointerState;
+use crate::scale::Scale;
 use crate::translate;
 use crate::windows::Windows;
 use lutece::{Event, KeyPress, Output as CoreOutput, Rect, WindowInfo};
@@ -26,6 +27,7 @@ use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, with_states,
 };
+use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
@@ -35,9 +37,10 @@ use smithay::wayland::shell::xdg::{
     XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::viewporter::ViewporterState;
 use smithay::{
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_viewporter, delegate_xdg_shell,
 };
 use std::collections::HashSet;
 
@@ -59,6 +62,8 @@ pub(crate) struct State {
     pub(crate) windows: Windows,
     /// The area of each output, to keep popups on one.
     pub(crate) screens: Vec<Rect>,
+    /// How finely clients are told to draw.
+    pub(crate) scale: Scale,
     pub(crate) popups: PopupManager,
     pub(crate) pointer: PointerState,
     /// Events for the core, waiting for the caller to collect them.
@@ -92,6 +97,9 @@ impl State {
         let _ = OutputManagerState::new_with_xdg_output::<Self>(display);
         // Only the global matters: it stays up for as long as the display does.
         let _ = XdgDecorationState::new::<Self>(display);
+        // Clients that draw at a fractional scale size their buffers with a viewport.
+        let _ = FractionalScaleManagerState::new::<Self>(display);
+        let _ = ViewporterState::new::<Self>(display);
         Ok(Self {
             display: display.clone(),
             compositor: CompositorState::new::<Self>(display),
@@ -103,6 +111,7 @@ impl State {
             seat,
             windows: Windows::default(),
             screens: Vec::new(),
+            scale: Scale::ONE,
             popups: PopupManager::default(),
             pointer: PointerState::new(),
             events: Vec::new(),
@@ -358,6 +367,7 @@ pub(crate) fn set_activated(toplevel: &ToplevelSurface, active: bool) {
 delegate_compositor!(State);
 delegate_xdg_shell!(State);
 delegate_xdg_decoration!(State);
+delegate_viewporter!(State);
 delegate_shm!(State);
 delegate_seat!(State);
 delegate_output!(State);
