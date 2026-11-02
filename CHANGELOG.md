@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Cargo workspace with three crates: `lutece` (core), `lutece-x11` and `lutece-wayland` (backend placeholders)
+- Cargo workspace with three crates: `lutece` (core), `lutece-x11` and `lutece-wayland`
 - Core contracts in `lutece::shared::contracts`: `Event`, `Effect`, `Scene` and `Change`
 - `diff`, which compares two scenes and returns the minimal changes a backend must apply
 - Validated building blocks: non-zero `Size`, `Rect`, `WinId`, `OutputId`, `Modifiers`, `SpawnCommand`
@@ -72,6 +72,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The X11 backend lists monitors with RandR 1.5 (the `randr` feature of `x11rb`), reports a new set of outputs when they change, and falls back to the whole root window as one output without RandR 1.5
 - Tests: a model-based property test over screen changes and output keys, unit tests for `set_outputs`, engine replays with two outputs (including a generated stream with changing outputs), and `monitors` integration tests that need `Xvfb`
 - The `minimal` example binds Super+, / Super+. (focus the previous / next monitor) and Super+Shift+, / Super+Shift+. (send the focused window there)
+- `lutece-wayland`: `WaylandBackend`, a Smithay compositor the caller drives like `X11Backend`; it serves clients on a free `lutece-N` socket, reports xdg toplevels as `WindowOpened` on their first commit (and `WindowClosed` when destroyed), reports a virtual output as `OutputsChanged`, and answers the core with `apply_scene` and `apply_effects`
+- `WaylandBackend` tells each client the size its placement gives it, marks the focused window active and gives it the keyboard, closes windows on `Effect::Close`, and starts programs with `WAYLAND_DISPLAY` set to its own socket; `Effect::Release` leaves the window unplaced because Wayland has no client to hand it back to
+- `WaylandBackend::key_event` and `KeyAction`: key combinations from `grab_keys` are returned to the caller and hidden from clients, their release included; Caps Lock and Num Lock do not change a match
+- `lutece-wayland`: `NestedBackend` shows the compositor in a window of the running session through Smithay's winit backend, follows the window's size, draws the placed windows and answers their frame callbacks
+- `lutece-wayland` example `minimal`: a keyboard-driven tiling WM on `NestedBackend`, bound to Alt so the session around it keeps Super
+- Tests: integration tests in which a real Wayland client is stepped in turn with the backend (output report, first-commit announcement, sizes from the scene, focus and activation, destroy, close, grabbed keys), and a property test for modifier translation
+- `Event::FloatAdjusted`: a pointer drag of a floating window, as pixel movement and growth; the engine applies it with the same float logic as the move and resize keys and ignores it for tiled or unknown windows
+- `lutece-wayland`: the pointer. `WaylandBackend::pointer_motion`, `pointer_button` and `pointer_axis` feed pointer input; entering a window reports `Event::FocusRequested`, clients receive motion, buttons and wheel, and with the drag modifier held (`set_drag_modifier`, Alt by default) the left button starts a move and the right button a resize, reported as `Event::FloatAdjusted` and hidden from clients
+- `lutece-wayland`: popups are configured where their client asks, drawn above their window, found under the pointer, and dismissed by a click outside when they grabbed the pointer
+- `lutece-wayland`: copy and paste between clients through the clipboard (data device) and the primary selection, which follow keyboard focus
+- `NestedBackend` takes pointer input from its window, shows the cursor a client asks for (a named cursor in the window, a client-drawn one with the windows) and has `set_drag_modifier`
+- Tests: core tests for `FloatAdjusted` including a property test that dragging and dragging back restores the scene, and Wayland integration tests for hover focus, buttons and wheel, move and resize drags, sub-pixel drags, popup placement, popup hit-testing and dismissal, and a clipboard transfer between two clients
+- `lutece-x11`: pointer drags. `X11Backend::set_drag_modifier` grabs the left and right buttons with the modifier held; the left button moves and the right button resizes the window under the pointer, reported as `Event::FloatAdjusted` and hidden from its client. The new error `DragAlreadyGrabbed` reports a combination another client holds. The `minimal` example uses Super
+- `lutece-wayland`: `xdg-decoration`. Every toplevel is told the compositor decorates it, whatever it asks for, and the compositor draws no frames, so clients drop their own title bars
+- `lutece-wayland`: a window is placed by the window geometry its client declares, so the part inside a shadow or margin lines up with its place, and the pointer finds the surface at the right spot
+- `lutece-wayland`: popups stay on the output. The positioner's slide, flip and resize rules are applied against the output holding the parent window when a popup opens and when it is repositioned, also for a popup opened from a popup
+- `lutece-wayland`: several outputs. `WaylandBackend::set_outputs` takes the complete set; a new id gets a `wl_output` global, a missing id loses it and a kept id takes its new area. The core hears a pending set only once, as the latest
+- `NestedBackend::open_with_outputs` cuts the window into outputs of equal width side by side; they follow the window when it is resized. The example reads `LUTECE_OUTPUTS` and binds Alt+, Alt+. and their Shift variants for moving between outputs
+- Tests: a property test that dragged steps add up to the pointer's displacement, a property test that the nested outputs tile the window, a property test for the popup target, and Wayland integration tests for decoration negotiation, geometry offsets, a popup sliding back onto the output and outputs added, moved and removed
 
 ### Changed
 - `Engine::scene` now builds the scene for every screen, each in its own output's area, instead of one workspace on the first output; its focus is the focused screen's focused window
@@ -80,4 +99,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StackSet::new` starts with one screen, for output 0, until `set_outputs` is called
 - `NextLayout` now cycles tile, monocle, grid, centered master; tile and centered master share one master ratio per workspace
 - Each workspace now holds its own layout instead of the engine holding one for all; `Engine::new` still takes a layout, which every workspace starts with
+- `WaylandBackend::set_output_size` is now the one-output form of `set_outputs`: it removes any other output
 - The `minimal` example has nine workspaces and key bindings (Super+Return, j/k, 1-9, Shift variants, c, q); it no longer needs to be stopped from outside

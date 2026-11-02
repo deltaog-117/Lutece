@@ -21,6 +21,7 @@ impl Engine {
     /// A window that opens is placed by the engine's rules: on the current workspace by
     /// default, on another one if a rule sends it there, floating if a rule floats it, or
     /// released to its client with [`Effect::Release`] if a rule ignores it.
+    /// A drag of a floating window moves and resizes it, as the move and resize keys do.
     /// A key press runs the action bound to it in the engine's keymap, and a press with
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
     /// focused window and spawning a program.
@@ -39,6 +40,15 @@ impl Engine {
             Event::FocusRequested(id) => {
                 // Not managed (never opened, or just closed): nothing to focus.
                 let _ = self.stacks.focus_window(id);
+            }
+            Event::FloatAdjusted { id, dx, dy, dw, dh } => {
+                // A floating size is relative to the screen, so with no screen yet only
+                // the movement applies.
+                let area = self.area_of(self.stacks.current_output());
+                self.stacks.update_float(id, |float| {
+                    let moved = float.moved(dx, dy);
+                    area.map_or(moved, |area| moved.resized(area, dw, dh))
+                });
             }
             Event::KeyPressed(press) => {
                 if let Some(action) = self.keymap.action(press).cloned() {

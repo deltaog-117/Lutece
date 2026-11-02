@@ -848,3 +848,80 @@ fn an_output_that_is_too_small_is_an_error_not_a_bad_scene() {
         Err(Error::AreaTooSmall { windows: 2, .. })
     ));
 }
+
+fn drag(raw: u64, dx: i32, dy: i32, dw: i32, dh: i32) -> Event {
+    Event::FloatAdjusted {
+        id: w(raw),
+        dx,
+        dy,
+        dw,
+        dh,
+    }
+}
+
+/// An engine with window 1 tiled and window 2 floating and focused, on a 1000x600 screen.
+fn engine_with_a_floating_window() -> Engine {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+    engine.handle(pressed('f', Modifiers::SUPER));
+    engine
+}
+
+fn rect_of(engine: &Engine, raw: u64) -> Rect {
+    scene(engine).get(w(raw)).expect("the window is shown").rect
+}
+
+#[test]
+fn dragging_a_floating_window_moves_and_resizes_it() {
+    let mut engine = engine_with_a_floating_window();
+    let before = rect_of(&engine, 2);
+
+    assert!(engine.handle(drag(2, 30, -20, 0, 0)).is_empty());
+    let moved = rect_of(&engine, 2);
+    assert_eq!((moved.x(), moved.y()), (before.x() + 30, before.y() - 20));
+    assert_eq!(
+        (moved.width(), moved.height()),
+        (before.width(), before.height())
+    );
+
+    engine.handle(drag(2, 0, 0, 50, 10));
+    let resized = rect_of(&engine, 2);
+    assert_eq!((resized.x(), resized.y()), (moved.x(), moved.y()));
+    assert_eq!(resized.width(), moved.width() + 50);
+    assert_eq!(resized.height(), moved.height() + 10);
+}
+
+#[test]
+fn dragging_a_tiled_or_unknown_window_changes_nothing() {
+    let mut engine = engine_with_a_floating_window();
+    let before = scene(&engine);
+
+    engine.handle(drag(1, 30, 30, 10, 10));
+    engine.handle(drag(99, 30, 30, 10, 10));
+
+    assert_eq!(scene(&engine), before);
+}
+
+proptest! {
+    #[test]
+    fn dragging_and_dragging_back_restores_the_scene(
+        dx in -50_000_i32..50_000, dy in -50_000_i32..50_000,
+    ) {
+        let mut engine = engine_with_a_floating_window();
+        let before = scene(&engine);
+        engine.handle(drag(2, dx, dy, 0, 0));
+        engine.handle(drag(2, -dx, -dy, 0, 0));
+        prop_assert_eq!(scene(&engine), before);
+    }
+
+    #[test]
+    fn no_drag_can_make_a_scene_invalid(
+        dx in any::<i32>(), dy in any::<i32>(), dw in any::<i32>(), dh in any::<i32>(),
+    ) {
+        let mut engine = engine_with_a_floating_window();
+        engine.handle(drag(2, dx, dy, dw, dh));
+        prop_assert!(engine.scene().is_ok());
+        let rect = rect_of(&engine, 2);
+        prop_assert!(rect.width() >= 1 && rect.height() >= 1);
+    }
+}

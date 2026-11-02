@@ -30,6 +30,9 @@
 | 2026-11-02 | Headless CI | `scripts/ci` requires Xvfb; a GitHub Actions workflow calls it | ✅ Confirmed |
 | 2026-11-02 | More layouts | Grid and centered master as new enum variants; one shared master ratio | ✅ Confirmed |
 | 2026-11-02 | Multi-output | One shared pool of workspaces; each output's screen shows one | ✅ Confirmed |
+| 2026-11-02 | Wayland backend | Smithay compositor the caller drives; spike, then headless protocol tests, then a nested window | ✅ Confirmed |
+| 2026-11-02 | Pointer drags | One core event, `FloatAdjusted`, for pointer drags; focus stays in the backend | ✅ Confirmed |
+| 2026-11-02 | Wayland outputs | A set of outputs on the backend; the nested window is cut into virtual monitors | ✅ Confirmed |
 
 ---
 
@@ -937,6 +940,137 @@ Correctness decided it. A workspace is always either on exactly one screen or hi
 - The engine keeps the reported outputs and their areas; the screens in `StackSet` only know output ids. The scene stays a flat list of rectangles in global coordinates, so `diff` and the backends' scene code did not change.
 - X11 outputs are RandR 1.5 monitors, identified by their name atom, not RandR outputs: a monitor is what a user sees as one screen, and a server can define its own. Without RandR 1.5 the whole root window is output 0.
 - Not verified on a server: no `Xvfb` was available here, so the `monitors` integration tests are only compiled. A smoke test in Xephyr was inconclusive because its RandR cannot set monitors. It is also unknown whether `SetMonitor` produces a RandR notify event; the backend selects screen, output and CRTC changes to cover the likely cases.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Wayland backend: a Smithay compositor the caller drives, built in three slices
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+On X11 another server draws and lutece only manages windows. On Wayland the backend is the server: it accepts clients, tells each one its size, handles the keyboard and draws. A whole backend did not fit one iteration, so the question was what the first slice delivers and how it is tested.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Protocol first, no pixels | Testable without a screen, mirrors the X11 approach | Nothing visible | H |
+| B. Nested winit window first | Visible result, closest to the final backend | Hard to test; protocol and GL bugs mixed | H |
+| C. Toolchain spike only | Smallest; proves Smithay builds here | No WM behavior | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** C, then A, then B, all in this cycle.
+
+The spike first because a failed Smithay build would have invalidated the design. A second because it gives the test-first footing the X11 backend has, so the drawing in B sits on a protocol layer that is already checked. B last because it is the only slice that needs a screen. The slices were built in that order; the spike was dropped once B's example covered what it proved.
+
+#### Implementation Notes
+
+- **Spike:** my first dependency check looked for `libxkbcommon` and concluded the development files were missing; the pkg-config name is `xkbcommon`, and everything Smithay needs was installed. Smithay 0.7 built without trouble with `backend_winit`, `renderer_gl`, `wayland_frontend` and `desktop`.
+- **No event loop framework:** the backend polls the listening socket and the display's file descriptor with `rustix`, so the caller-owns-the-loop shape of the X11 backend is kept and `calloop` is not needed. `NestedBackend::next_events` alternates between the window system and the clients in 8 ms slices, which bounds key latency; it is a polling loop and uses CPU while idle.
+- **When a window opens:** a toplevel is reported on its first commit, because title and app id are set before it. The initial configure is sent right then, so a window the core never places still finishes its handshake.
+- **Scene application:** `Show` and `Move` set the toplevel's size and send a configure; focus sets the active state and the keyboard focus. Position lives only in the renderer. `Hide` clears the rectangle, so the window is not drawn but stays alive.
+- **`Effect::Release`:** Wayland has no client to hand a window back to, so the window is dropped from the managed set and never sized or drawn again.
+- **Keys:** the grab test uses the keysym a key produces with no modifier applied (the same naming as X11) plus Shift, Ctrl, Alt and Super; locks are ignored. A grabbed key's release is hidden too, so a client never sees half a key press. The public `key_event` takes a plain keycode and a `KeyAction` so Smithay types stay out of the public API.
+- **Tests:** a real `wayland-client` client and the backend run on one thread and are stepped in turn, so nothing blocks and no thread races. Seven integration tests plus a property test for modifier translation. I removed the key grab to confirm the grabbed-key test fails without it.
+- **Duplication:** `Flow` exists in both backend crates. Moving it into the core would touch the X11 crate, so it was left.
+- **Not done, on purpose:** pointer input, drawing and positioning popups (they are configured only), clipboard (no data device), `linux-dmabuf`, a real session backend (DRM, libinput), several outputs, XWayland.
+- **Not verified:** the nested WM was only smoke-tested inside Hyprland (it ran, a client stayed connected, nothing was printed). Nobody has looked at the window, so that windows are drawn at the right place is unconfirmed. Alacritty prints EGL warnings because no dmabuf is offered; it falls back to shared memory.
+- **Tooling:** the formatting hook orders imports differently from `cargo fmt` (edition 2024), so `cargo fmt --all` must be run before the check.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Pointer drags: one core event, focus stays in the backend
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The Wayland backend had no pointer. Hover focus fits the existing `FocusRequested` event, but moving and resizing a floating window with the mouse has to reach the core, because a float is stored there as offsets from a default rectangle. Popups and the clipboard were built in the same cycle and needed no decision.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Focus only, pointer stays in the backend | No core change, easiest to finish | No mouse move or resize | S |
+| B. A plus one float-drag event | Finishes the roadmap item with a small contract change | One new shared event; X11 does not emit it yet | M |
+| C. Raw pointer events in the core | Full pointer control for the plugin protocol | Large, hard to undo, duplicates hit-testing | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** B.
+
+The core already had the pure pieces (`Float::moved` and `Float::resized`), so the only new contract surface is `Event::FloatAdjusted { id, dx, dy, dw, dh }`, and `Event` is `#[non_exhaustive]`, so adding a variant breaks nobody. C would have been the hardest to undo for a need nobody has yet; A would have left the mouse half of the item for a later core change anyway.
+
+#### Implementation Notes
+
+- **Hit-testing and focus stay in the backend.** It knows which surface is under the pointer, including popups and subsurfaces, and only a window with a buffer can be hit, so a pointer over a window's unused margin changes nothing.
+- **The drag modifier is a backend setting**, Alt by default, because the backend swallows the click and the core cannot know what to swallow. `Modifiers::NONE` turns drags off.
+- **Drags are whole pixels.** The backend sends integer deltas and carries the sub-pixel remainder forward, so slow motion is not lost. A resize always grows from the bottom-right corner.
+- **The engine decides what a drag means.** `FloatAdjusted` for a tiled or unknown window does nothing, so the backend does not need to know which windows float. A resize is measured against the focused output's area, the same limitation as the resize keys.
+- **Popups** are tracked with Smithay's popup manager, configured after their first commit, placed at their parent's origin plus the position the client asked for, and listed in front of their window. A popup that grabbed the pointer is dismissed by the first click outside popups. Popups are not kept on the output.
+- **Clipboard:** only the selection focus follows keyboard focus; the compositor never reads a selection. Drag and drop between clients is wired but has no icon and is untested.
+- **Cursor:** a named cursor is passed to the host window, a client-drawn one is drawn with the windows, and a hidden one hides the host cursor.
+- **Tests:** core tests include a property test that a drag and its reverse restore the scene. The Wayland tests use real shm buffers because a surface without one has no size and cannot be hit. I disabled the selection focus and the popup layers in turn and confirmed the matching tests fail.
+- **Not verified:** the pointer and cursor code in the nested window, popups drawn on screen and a real paste between terminals have not been looked at; the nested example was smoke-tested only (it ran, a client stayed connected, nothing was printed).
+- **Not done:** the X11 backend does not report drags; clients still draw their own decorations (no `xdg-decoration`); window geometry offsets are ignored.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Wayland outputs: a set of outputs on the backend, virtual monitors in the nested window
+
+**Date:** 2026-11-02
+**Status:** Confirmed
+
+#### Context / Background
+
+The Wayland backend had one hard-wired output, so `FocusNextOutput` and the other multi-output actions could not be tried on it. The same cycle added X11 pointer drags, `xdg-decoration` with window geometry offsets, and popup placement on the output. Those had one credible approach each; only the outputs needed a choice, because Smithay's winit backend opens exactly one host window.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| A. Virtual monitors inside the one window | Tests the multi-output core on Wayland, no new dependency | Simulated hot-plug, one shared scale | M |
+| B. Single output that follows the host | Smallest change, handles scale | Multi-output stays untestable on Wayland | S |
+| C. One host window per output | Real independent windows | Needs our own winit and EGL layer | H |
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+A and B both need the backend to hold a list of outputs, and A adds only the cut of the window on top. It is also the only option that lets popup placement be tried against more than one output. C is not possible on Smithay's winit backend.
+
+#### Implementation Notes
+
+- **The backend takes the complete set**, like the core's `OutputsChanged`: `set_outputs` creates a `wl_output` global for a new id, removes the global of a missing id and moves a kept one. Several sets reported before the caller collects events are merged into the latest, in place, so the core hears one.
+- **The nested window is cut by position, not by summing widths**, so the pieces cover it exactly and differ by at most a pixel; a window narrower than the count gets one output per column. A property test checks the tiling.
+- **Decorations:** the answer is always server side, because the compositor draws no frames. The configure is sent at once only for a window that already had its first one.
+- **Geometry offsets:** the scene rectangle is for the window geometry, so the surface is drawn at the rectangle minus the declared geometry origin. A popup's position is relative to the parent geometry, so it needed no change.
+- **Popups:** Smithay's `get_unconstrained_geometry` applies the client's own slide, flip and resize rules against the output of the parent window, measured from the parent's origin; a popup of a popup is shifted by where the parent popup sits. It is decided when the popup opens or is repositioned, so a window dragged afterwards takes its popups along unconstrained.
+- **X11 drags:** the buttons are grabbed on the root with the modifier (and CapsLock/NumLock variants), so the click never reaches the window. Unlike Wayland there is no default modifier: the grab can fail when another client holds it, so `set_drag_modifier` is explicit and returns an error.
+- **Not verified:** none of this has been seen on screen. The nested example with several outputs, decorations in Alacritty, a popup near an edge and X11 drags in Xephyr are checked only by scripted clients and unit tests. The X11 drag path has no integration test, because `Xvfb` is not installed here.
+- **Not done:** host scale changes (every output draws at scale 1), clipping a client's shadow to its geometry, and re-constraining popups when their window moves.
 
 #### Review / Update Log
 

@@ -1,6 +1,6 @@
 //! The single error type returned by every fallible operation in the backend.
 
-use lutece::{KeyPress, Keysym, WinId};
+use lutece::{KeyPress, Keysym, Modifiers, WinId};
 use std::io;
 use thiserror::Error;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
@@ -39,6 +39,10 @@ pub enum Error {
     /// Another client already holds a key combination the core wants to grab.
     #[error("key combination {0:?} is already grabbed by another client")]
     KeyAlreadyGrabbed(KeyPress),
+    /// Another client already holds the mouse buttons the core wants for dragging windows
+    /// with this modifier.
+    #[error("the drag buttons with modifier {0:?} are already grabbed by another client")]
+    DragAlreadyGrabbed(Modifiers),
     /// The core rejected a value built from what the X server reported.
     #[error(transparent)]
     Core(#[from] lutece::Error),

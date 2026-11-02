@@ -1,12 +1,13 @@
 //! The connection to the X server, and the backend built on it.
 
 use crate::apply::{Flow, execute, plan, run_effects};
+use crate::drag::Drags;
 use crate::error::{Error, Result};
-use crate::grabs::{Keyboard, grab_keys, regrab_keys};
+use crate::grabs::{Keyboard, grab_drag_buttons, grab_keys, regrab_keys, release_drag_buttons};
 use crate::outputs;
 use crate::translate::{existing, key_press, translate};
 use crate::windows::Windows;
-use lutece::{Effect, Event, KeyPress, Scene, WindowInfo, diff};
+use lutece::{Effect, Event, KeyPress, Modifiers, Scene, WindowInfo, diff};
 use std::mem;
 use std::os::fd::{AsFd, BorrowedFd};
 use x11rb::connection::Connection;
@@ -48,6 +49,7 @@ pub struct X11Backend {
     /// The key combinations grabbed so far, to grab again after a keyboard remap.
     grabbed: Vec<KeyPress>,
     windows: Windows,
+    drags: Drags,
     /// What the X server is showing, so a new scene is applied as a difference.
     shown: Scene,
     /// Events produced before the first X event, such as the monitors.
@@ -100,6 +102,7 @@ impl X11Backend {
             keyboard,
             grabbed: Vec::new(),
             windows,
+            drags: Drags::default(),
             shown: Scene::empty(),
             queued,
         })
@@ -162,6 +165,25 @@ impl X11Backend {
         Ok(())
     }
 
+    /// Sets the modifier that turns a press of the left or right button into a drag of the
+    /// window under the pointer, reported as [`Event::FloatAdjusted`]: the left button
+    /// moves it and the right button resizes it, and the window's client sees none of it.
+    /// The core ignores the drag unless the window floats. [`Modifiers::NONE`], which is
+    /// the state until this is called, leaves the buttons to the clients.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DragAlreadyGrabbed`] if another client holds the buttons with this
+    /// modifier, or an error if the connection to the X server breaks.
+    pub fn set_drag_modifier(&mut self, modifier: Modifiers) -> Result<()> {
+        release_drag_buttons(&self.conn, self.root)?;
+        if modifier != Modifiers::NONE {
+            grab_drag_buttons(&self.conn, self.root, modifier)?;
+        }
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// Makes the screen show `scene`, sending only what differs from what is shown.
     ///
     /// # Errors
@@ -197,6 +219,7 @@ impl X11Backend {
             keyboard,
             grabbed,
             windows,
+            drags,
             queued,
             ..
         } = self;
@@ -204,6 +227,24 @@ impl X11Backend {
         if let XEvent::KeyPress(press) = event {
             queued.extend(key_press(keyboard, press));
             return Ok(());
+        }
+
+        // These arrive only through the drag button grab, which is why they all mean a drag.
+        match event {
+            XEvent::ButtonPress(press) => {
+                let at = (press.root_x, press.root_y);
+                drags.press(press.detail, press.child, at, windows);
+                return Ok(());
+            }
+            XEvent::MotionNotify(motion) => {
+                queued.extend(drags.motion((motion.root_x, motion.root_y)));
+                return Ok(());
+            }
+            XEvent::ButtonRelease(release) => {
+                drags.release(release.detail);
+                return Ok(());
+            }
+            _ => {}
         }
 
         if let XEvent::MappingNotify(mapping) = event {

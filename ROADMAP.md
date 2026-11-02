@@ -29,6 +29,15 @@ Author: deltaog-117
 - ✅ More layouts – `Grid` and `CenteredMaster` as separate modules; `NextLayout` cycles tile, monocle, grid, centered master, and the master ratio carries across tile and centered master
 - ✅ Nested dev environment – `scripts/dev-x11` builds the example, starts Xephyr on a spare display and runs the WM in it, so testing needs no logout
 - ✅ Multi-output support – `StackSet` keeps one shared pool of workspaces and each output's screen shows one of them; `Engine::scene` lays out every screen in its own area; `FocusNextOutput`, `FocusPrevOutput`, `SendToNextOutput` and `SendToPrevOutput` actions; unplugging a monitor hides its workspace instead of losing its windows; the X11 backend lists monitors through RandR 1.5 and follows changes
+- ✅ Wayland backend, protocol side – `WaylandBackend` is a Smithay compositor the caller drives: it accepts clients, reports each xdg toplevel on its first commit, sizes and focuses windows from the scene, takes grabbed key combinations before clients see them, and spawns programs with `WAYLAND_DISPLAY` pointing at itself; tested without a screen by a real Wayland client stepped in turn with the backend
+- ✅ Wayland backend, nested window – `NestedBackend` shows the compositor in a window of the running session (Smithay's winit backend), draws the placed windows and answers frame callbacks; the `minimal` example in `lutece-wayland` is a small keyboard-driven WM on it
+- ✅ Wayland pointer input – focus follows the pointer (`Event::FocusRequested` on entering a window), clients get motion, buttons and wheel, and the cursor a client asks for is shown; with the drag modifier held (Alt by default) the left button moves and the right button resizes the window under the pointer
+- ✅ Floating drags in the core – `Event::FloatAdjusted` moves and resizes a floating window by pixel amounts, sharing the keyboard actions' float logic; tiled and unknown windows ignore it
+- ✅ Mouse drags on X11 – `X11Backend::set_drag_modifier` grabs the left and right buttons on the root with the modifier held, so the click never reaches the window; motion becomes `Event::FloatAdjusted`, as on Wayland; the `minimal` example uses Super
+- ✅ Wayland window decorations – `xdg-decoration` always answers server side (the compositor draws no frames, so clients drop their title bars), and a window is placed by the geometry its client declares, so a client that keeps a shadow lines up with its place
+- ✅ Wayland popup placement – a popup's own slide, flip and resize rules are applied against the output of its parent window, when it opens and when it is repositioned, also for a menu opened from a menu
+- ✅ Wayland outputs – `WaylandBackend::set_outputs` takes the complete set of outputs (added, moved and removed ones become `wl_output` globals or lose them); `NestedBackend::open_with_outputs` cuts the window into several outputs side by side, so the multi-output actions can be tried on Wayland (`LUTECE_OUTPUTS=2` in the example)
+- ✅ Wayland popups and clipboard – popups (menus, tooltips) are placed where their client asks, drawn above their window, reachable by the pointer and dismissed by a click elsewhere when they grabbed it; copy and paste work between clients through the clipboard and the primary selection
 
 ---
 
@@ -40,7 +49,10 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-- None at the moment.
+- **Wayland buffer sharing** – `linux-dmabuf` so GPU-rendered clients do not fall back to shared memory.
+- **Wayland host scale** – follow the scale factor of the window the nested backend runs in; today every output is drawn at scale 1.
+- **Wayland shadows** – clip a client's surface to its declared geometry, so a client that ignores `xdg-decoration` and draws a shadow does not paint over its neighbours.
+- **Popups that follow their window** – an open popup keeps the position it was given when its window moves (a floating drag), so it can leave the output until it is reopened.
 
 ---
 
@@ -52,7 +64,7 @@ Author: deltaog-117
 
 ## 🔭 Long‑Term Vision
 
-- **Wayland backend** – `lutece-wayland` on Smithay, tested nested inside Hyprland through its winit backend, sharing the same core and scene diff.
+- **Wayland on real hardware** – a session backend for `lutece-wayland` (DRM, libinput, seat management) so it can run as the compositor of a login, not only nested.
 - **XWayland windows** – treat X11 clients under the Wayland backend as one more window source.
 - **Plugin protocol** – serializable `Event` and `Effect` over a socket, so the plugin-capable WM can host plugins in any language (lives in that WM, not this library).
 
@@ -60,6 +72,7 @@ Author: deltaog-117
 
 ## 🎯 Next Actions (Immediate)
 
-1. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-2. **Run the integration tests once on a machine with `Xvfb`** – none was available while writing them, so they have only been compiled. This includes the new `monitors` tests, which also settle whether Xvfb reports a monitor change as an event.
-3. **Documentation site** – guide on writing a WM with the library.
+1. **Look at the nested Wayland WM** – run `cargo run -p lutece-wayland --example minimal` (and with `LUTECE_OUTPUTS=2`) and confirm by eye that windows are drawn, tiled and follow the keys, that the pointer focuses windows, that Alt+drag moves a floating window (Alt+f first), that a menu opens, closes and stays on its output, that Alacritty draws no title bar of its own, that Alt+, and Alt+. move between the two outputs, and that copy and paste work between two terminals; none of this has been seen on screen yet (only tested with a scripted client).
+2. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
+3. **Run the X11 integration tests once on a machine with `Xvfb`** – none was available while writing them, so they have only been compiled. This includes the `monitors` tests, which also settle whether Xvfb reports a monitor change as an event. Add a test there that drags a floating window with XTEST button presses; the X11 drag code is covered only by unit tests so far.
+4. **Documentation site** – guide on writing a WM with the library.

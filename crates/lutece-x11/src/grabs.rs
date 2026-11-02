@@ -10,7 +10,7 @@ use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::xproto::{
-    ConnectionExt, Grab, GrabMode, KeyButMask, Keycode, ModMask, Window,
+    ButtonIndex, ConnectionExt, EventMask, Grab, GrabMode, KeyButMask, Keycode, ModMask, Window,
 };
 
 /// CapsLock and NumLock (Mod2 on practically every setup) must not stop a binding from
@@ -169,6 +169,56 @@ pub(crate) fn grab_keys(
             }
             other => other?,
         }
+    }
+    Ok(())
+}
+
+/// Grabs the drag buttons on the root window with `modifier` held, so their presses and
+/// the pointer motion that follows reach us instead of the window under the pointer.
+///
+/// # Errors
+///
+/// Returns [`Error::DragAlreadyGrabbed`] if another client holds one of the combinations;
+/// none stays grabbed then.
+pub(crate) fn grab_drag_buttons(
+    conn: &impl Connection,
+    root: Window,
+    modifier: Modifiers,
+) -> Result<()> {
+    let mut pending = Vec::new();
+    for button in [ButtonIndex::M1, ButtonIndex::M3] {
+        for lock in lock_variants() {
+            pending.push(conn.grab_button(
+                false,
+                root,
+                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                button,
+                mod_mask_of(modifier) | lock,
+            )?);
+        }
+    }
+    let mut refused = false;
+    for cookie in pending {
+        match cookie.check() {
+            Err(ReplyError::X11Error(e)) if e.error_kind == ErrorKind::Access => refused = true,
+            other => other?,
+        }
+    }
+    if refused {
+        release_drag_buttons(conn, root)?;
+        return Err(Error::DragAlreadyGrabbed(modifier));
+    }
+    Ok(())
+}
+
+/// Drops every drag button grab this client holds on `root`.
+pub(crate) fn release_drag_buttons(conn: &impl Connection, root: Window) -> Result<()> {
+    for button in [ButtonIndex::M1, ButtonIndex::M3] {
+        conn.ungrab_button(button, root, ModMask::ANY)?;
     }
     Ok(())
 }

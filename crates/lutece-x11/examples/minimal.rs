@@ -16,6 +16,8 @@
 //! | Super+f | float the focused window, or tile it again |
 //! | Super+Ctrl+h/j/k/l | move the floating window left / down / up / right |
 //! | Super+Ctrl+Shift+h/j/k/l | narrow / heighten / shorten / widen the floating window |
+//! | Super+left-drag | move the window under the pointer, if it floats |
+//! | Super+right-drag | resize the window under the pointer, if it floats |
 //! | Super+, / Super+. | focus the previous / next monitor |
 //! | Super+Shift+, / Super+Shift+. | send the focused window to the previous / next monitor |
 //! | Super+Shift+c | close the focused window |
@@ -107,6 +109,7 @@ fn main() -> Result<()> {
         .with_rules(rules(&tags)?)?;
     let mut backend = X11Backend::connect()?;
     backend.grab_keys(engine.grabs())?;
+    backend.set_drag_modifier(Modifiers::SUPER)?;
 
     loop {
         for event in backend.next_events()? {

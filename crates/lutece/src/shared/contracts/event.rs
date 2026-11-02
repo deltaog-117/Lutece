@@ -24,6 +24,22 @@ pub enum Event {
     FocusRequested(WinId),
     /// A key combination the core asked the backend to grab was pressed.
     KeyPressed(KeyPress),
+    /// The pointer dragged a window: it moved by `dx`, `dy` and grew by `dw`, `dh`
+    /// (positive goes right and down). Only floating windows follow; for a tiled or
+    /// unknown window the event is ignored. A move sends zero growth and a resize
+    /// sends zero movement.
+    FloatAdjusted {
+        /// The dragged window.
+        id: WinId,
+        /// Horizontal movement in pixels.
+        dx: i32,
+        /// Vertical movement in pixels.
+        dy: i32,
+        /// Change of width in pixels.
+        dw: i32,
+        /// Change of height in pixels.
+        dh: i32,
+    },
     /// The set of screens changed; this is the complete new set.
     OutputsChanged(Vec<Output>),
 }

@@ -224,6 +224,16 @@ impl StackSet {
         }
     }
 
+    /// Changes the float of `id` wherever it is, if it is floating; otherwise does nothing.
+    pub(crate) fn update_float(&mut self, id: WinId, change: impl FnOnce(Float) -> Float) {
+        let Some(workspace) = self.workspaces_mut().find(|w| w.contains(id)) else {
+            return;
+        };
+        if let Some(float) = workspace.float_of(id) {
+            workspace.set_float(id, Some(change(float)));
+        }
+    }
+
     /// Removes a window from whichever workspace holds it.
     ///
     /// # Errors
