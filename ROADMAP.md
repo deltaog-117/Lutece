@@ -47,6 +47,10 @@ Author: deltaog-117
 - ✅ X11 drag tests – three tests with XTEST pointer events: Super+left-drag moves a floating window, Super+right-drag resizes it, and a drag without the modifier changes nothing
 - ✅ XWayland windows – `WaylandBackend::enable_xwayland` runs Xwayland and the window manager side Smithay needs; an X11 window is reported as `WindowOpened` (title and class from its properties, a dialog's parent as `transient_for`), tiled, floated, focused (the X input focus follows) and closed like any other, and a spawned program gets `DISPLAY`. X11 menus and tooltips (override-redirect) are not managed: they are drawn above everything where their program put them and do not take focus. Tested with a real Xwayland and an X11 client of its own; copy and paste between X11 and Wayland programs is done in the next item
 - ✅ Clipboard between X11 and Wayland programs – Xwayland's selections are bridged to the Wayland ones for the clipboard and the primary selection: only the format list crosses when a selection is set, the data moves on paste straight from the program that copied it; an X11 program reads a Wayland selection only while an X11 window has the keyboard focus; a selection a Wayland client holds is not cleared by an X11 program giving up its own
+- ✅ Fullscreen windows in the core – `Event::FullscreenRequested` and `Action::ToggleFullscreen`; a fullscreen window covers its whole output, bars included, and is drawn above everything on it, while the other windows keep their places below. Only the focused window can be fullscreen: moving the focus, closing the window or opening another ends it, so the window with the keyboard is never hidden. The scene carries the state (`Scene::is_fullscreen`) and `diff` reports `Change::Fullscreen` ahead of the window's move, so a backend sizes it once
+- ✅ Reserved space in the core – `Event::ReservedChanged` gives the complete reserve of an output as `Insets`; tiled and floating windows are laid out in what is left (`Rect::inset`). A claim on more than half of an axis is ignored on that axis, so no client can leave the windows without room (a property test found the 1-pixel case)
+- ✅ X11 hints and struts – windows of type dock (bars) are left where they are and not managed; their `_NET_WM_STRUT_PARTIAL` or `_NET_WM_STRUT` is worked out per monitor (a bar over one monitor reserves space on that one), follows changes and removal, and bars already showing at startup count. `_NET_WM_STATE` fullscreen requests (add, remove, toggle) reach the core, and the backend keeps the property in step with the scene, also when a window is hidden. `_NET_SUPPORTED` and the check window tell toolkits what is honoured. The example binds Super+Shift+f
+- ✅ Layer-shell on Wayland – `wlr-layer-shell` (version 4) through Smithay's layer map: bars, launchers and wallpapers are placed by the compositor, never tiled, and the space they keep clear reaches the core as `ReservedChanged`. Stacking is overlay, fullscreen windows, top, windows, bottom, background, so a fullscreen window hides the bars. They take the pointer; one with exclusive interactivity holds the keyboard, one that asks for it on demand gets it when clicked until the pointer enters a window; a bar's popups are placed where the client asks; a surface on an output that goes away is asked to close. Fullscreen requests from toplevels (also before the first commit) and from X11 programs through Xwayland reach the core, and the state rides on the next configure
 - ✅ Input module and hardware groundwork – keyboard and pointer handling moved out of `NestedBackend` into `input`, which takes events from any Smithay input backend (winit now, libinput later) and keeps a relative pointer inside the output; Smithay gains the DRM, GBM, udev, libinput, libseat and multi-GPU features, not yet used by a session backend
 
 ---
@@ -59,11 +63,8 @@ Author: deltaog-117
 
 ## 🟡 Medium Priority (Important)
 
-Needed before `lucarne` can be written on top of the library, in this order:
+Needed before `lucarne` can be written on top of the library:
 
-- **Fullscreen windows in the core** – a window can ask for, and be given, the whole output; both backends lay out around it.
-- **X11 hints and struts** – EWMH and ICCCM hints (`_NET_WM_STATE`, fullscreen, `_NET_WM_STRUT`) so a bar on X11 is not covered by tiled windows.
-- **Layer-shell on Wayland** – bars, launchers and wallpapers, with the space they reserve taken out of the area windows are laid out in.
 - **First tagged release** – a `0.x` version of the three crates with the changelog moved out of `[Unreleased]`, so `lucarne` depends on a version and not on a path.
 
 ---
@@ -72,6 +73,9 @@ Needed before `lucarne` can be written on top of the library, in this order:
 
 - **Documentation site** – guide on writing a WM with the library.
 - **Stacking and active-window hints for X11 windows under Xwayland** – EWMH hints for the X side; X11 programs mostly work without them.
+- **Xwayland test fixture flake** – 3 of 12 runs of the Xwayland integration tests fail at `Fixture::start` with `Connection refused` on the Xwayland display, with no change applied (measured on the commit before the fullscreen work). It fails a whole `scripts/check` now and then.
+- **X11 programs that start fullscreen under Xwayland** – a program that sets `_NET_WM_STATE` before it maps is not seen as asking, because Smithay does not read that property; one that asks with the message (after it maps) is. Reading it needs the backend's own connection to Xwayland.
+- **Bars that are override-redirect on X11** – a bar that opts out of management (`dzen`-style) is not tracked and reserves nothing.
 - **Start Xwayland on demand** – today it starts with `enable_xwayland`; starting it when the first X11 program connects saves its memory when none is used.
 
 ---
@@ -88,5 +92,6 @@ Needed before `lucarne` can be written on top of the library, in this order:
 ## 🎯 Next Actions (Immediate)
 
 1. **Look at the nested Wayland WM** – run `cargo run -p lutece-wayland --example minimal_wayland` (and with `LUTECE_OUTPUTS=2`) and confirm by eye that windows are drawn, tiled and follow the keys, that the pointer focuses windows, that Alt+drag moves a floating window (Alt+f first), that a menu opens, closes and stays on its output, that Alacritty draws no title bar of its own, that a client with a shadow (a GTK window) does not paint over its neighbour, that Alt+, and Alt+. move between the two outputs, that copy and paste work between two terminals, and that on a host at a scale other than 1 (try 1.5) windows have the size you expect and text in Alacritty or a GTK 4 app is sharp, and that a client without fractional scale (a GTK 3 app) is sharp too; that a GPU client (`weston-simple-dmabuf-egl`, or Firefox) draws and is not blank, which also shows whether this machine's EGL device gives a render node (`/dev/dri/renderD128` exists here; with software rendering the nested compositor offers no dmabuf); that copy and paste cross between an X11 program (`xterm`) and a Wayland one, in both directions, for the clipboard and for selecting text with the mouse; and that an X11 program (`DISPLAY=:N` is printed at startup; try `xterm` or `xeyes`) is tiled with the others, takes focus and typing, that its menus open in place and over its window, and that it is not blurry at a scale of 1.5; none of this has been seen on screen yet (only tested with a scripted client and a scripted X11 client). The one run so far only showed the startup line.
-2. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
-3. **Documentation site** – guide on writing a WM with the library.
+2. **Look at bars and fullscreen** – on X11, `scripts/dev-x11` then a bar (`tint2` or `polybar`) and `xterm`: tiles start below the bar, Super+Shift+f covers the bar and again puts the window back, a video player's fullscreen button does the same, and the bar's space comes back when it quits. On the nested Wayland WM, `waybar` (windows leave room for it, a fullscreen window hides it; Alt+Shift+f fullscreens the focused window), a launcher such as `fuzzel` or `wofi` (it takes the keyboard and gives it back), and a wallpaper (`swaybg`). None of this has been seen on screen; it is tested with scripted clients only.
+3. **Record a benchmark baseline** – `cargo bench -p lutece`, so the 5% regression gate has something to compare against.
+4. **Documentation site** – guide on writing a WM with the library.

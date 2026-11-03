@@ -38,6 +38,10 @@
 | 2026-11-02 | Wayland dmabuf | `linux-dmabuf` v4 with the render GPU named, fed by the host that owns the renderer | ✅ Confirmed |
 | 2026-11-02 | XWayland | Smithay's window manager on a loop kept inside the backend; windows and menus, no clipboard bridge yet | ✅ Confirmed |
 | 2026-11-02 | X11 and Wayland clipboard | Formats cross when set, data on paste; X11 reads only while an X11 window has focus | ✅ Confirmed |
+| 2026-11-03 | Reserved space | A separate `ReservedChanged` event with `Insets`; the output keeps its true size; a claim on over half an axis is ignored | ✅ Confirmed |
+| 2026-11-03 | Fullscreen | State in the scene (a set), reported by `diff`; only the focused window can be fullscreen | ✅ Confirmed |
+| 2026-11-03 | X11 bars | Dock windows tracked, not managed; struts worked out per monitor; EWMH advertised | ✅ Confirmed |
+| 2026-11-03 | Wayland layer-shell | Smithay's layer map; one front-to-back list of layers; keyboard for exclusive and clicked surfaces | ✅ Confirmed |
 
 ---
 
@@ -1245,3 +1249,113 @@ Copy and paste worked between Wayland clients but stopped at Xwayland, which kee
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-02 | Initial entry | deltaog-117 |
+
+---
+
+### Reserved space and fullscreen: two contracts, one rule for each
+
+**Date:** 2026-11-03
+**Status:** Confirmed
+
+#### Context / Background
+
+The next library work was fullscreen windows, X11 struts and Wayland layer-shell. The three share one need in the core: a bar must shrink the area tiles share without shrinking what a fullscreen window covers, and a backend must be able to tell a client it is fullscreen.
+
+#### Options Considered
+
+| Option | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|
+| Reserve: a separate `ReservedChanged` event | The output keeps its true size; monitor matching is untouched | One more event and map | M |
+| Reserve: `Output` carries a usable rectangle | Fewest event kinds | A bar change looks like a monitor change; breaks every `Output { .. }` | M |
+| Fullscreen: a flag in the scene | One source of truth; `diff` and its property tests extend | `Scene` and `Change` grow | M |
+| Fullscreen: a one-shot `Effect` | Scene unchanged | State can drift; contradicts "placement and focus live in the scene" | S |
+
+#### Decision & Rationale
+
+**Chosen Option:** a separate event for the reserve, and the state in the scene. Both were picked from the COA tables. One detail differs from the text of the second COA: the flag is not a field of `Placement` but a set on `Scene` (`with_fullscreen` checks that each window is listed). A field would have meant touching about twenty `Placement { .. }` literals in the layouts for no gain, and the set keeps the same property: the scene says it, `diff` reports it.
+
+#### Implementation Notes
+
+- **Insets:** `Insets` is four plain pixel counts; `Rect::inset` clamps so a result is never empty. `Insets::max` is for two bars on one edge, which both start at the screen's edge, so the larger wins, not the sum.
+- **A claim on most of an axis is ignored on that axis.** A property test over random event streams found that a bar reserving nearly the whole width left a 1-pixel area, and `scene()` then failed with `AreaTooSmall`. Any X11 client can set a strut, so a client could break the scene. `Insets::limited_to` drops a claim that takes more than half of an axis, whole, not partly: easy to state and to test.
+- **Where the reserve is kept:** in the engine, per output, and not dropped when an output goes away, so a bar that outlives a monitor change is still honoured when the output returns. Backends therefore reset an output they no longer have.
+- **Fullscreen is the focused window's:** `Workspace` keeps `fullscreen` only while it equals the focus, and every focus change settles it. Otherwise the window with the keyboard could be hidden behind a fullscreen one. Cost: opening a dialog ends a video's fullscreen. The alternative, keeping it and raising the dialog, was left out as more state for a less common case.
+- **Scene order:** the fullscreen window is removed from its layout position and put last on its output, with the whole output as its rectangle. The other windows keep the slots they would have had, so leaving fullscreen reflows nothing.
+- **A request from a window that is not focused** focuses it first, on its own workspace, without changing what any screen shows.
+- **`diff` order:** fullscreen changes come before the window's show or move, so a Wayland backend can send the state and the size in one configure.
+- **Not verified:** nothing has been seen on screen.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-03 | Initial entry | deltaog-117 |
+
+---
+
+### X11 bars: dock windows tracked, struts per monitor, EWMH advertised
+
+**Date:** 2026-11-03
+**Status:** Confirmed
+
+#### Context / Background
+
+A bar on X11 is an ordinary window to a window manager that does not know better: it was tiled with the others. The roadmap asked for struts and the fullscreen hints.
+
+#### Decision & Rationale
+
+**Chosen Option:** a window of type `_NET_WM_WINDOW_TYPE_DOCK` is mapped where it asks and kept out of the core; only what it reserves reaches the core. The strut is worked out per output in a small pure module so it can be property-tested without a server.
+
+#### Implementation Notes
+
+- **Struts are screen-wide, the core's reserve is per output.** A strut is measured from the edges of the whole X screen and may cover only part of an edge (`_NET_WM_STRUT_PARTIAL`). For each output the module finds how far each strut reaches into it, so a bar over the left of two monitors reserves space there and not on the right.
+- **Reporting:** the backend keeps what it told the core for each output and sends only the differences, resets outputs that vanished, and sends the reserve before the adopted windows at startup so the first scene already leaves room.
+- **Fullscreen:** a client message `_NET_WM_STATE` (add, remove, toggle) naming the fullscreen atom becomes `FullscreenRequested`; a toggle is worked out from what was last shown. A window that sets the state before mapping is read at its map request. The backend writes the property from the scene by changing only its own atom, and clears it when a fullscreen window is hidden, because the core forgets the state then and a client that left fullscreen while hidden would come back claiming it.
+- **EWMH:** `_NET_SUPPORTED` and a check window named `lutece`. Toolkits use them to decide whether to ask the window manager for fullscreen or to resize themselves.
+- **Test pitfall, a flaky harness:** the 13 new X11 tests made the suite fail in about half the runs. The same suite at the previous commit failed in 3 of 6 runs, so the fault was already there. The private `Xvfb` restarted when the readiness probe closed its only connection, and the test client's connection landed in the restart (`Connection reset by peer`). Starting it with `-noreset` fixed it: 0 failures in 12 runs on the old suite, 0 in 12 on the new one.
+- **Test pitfall, a stale binary:** the harness builds the example only when it is missing, and `cargo test --test integration` does not rebuild examples, so the first run of the new tests used the old window manager and tiled the bar. Rebuild the example (`cargo build -p lutece-x11 --example minimal`) after changing it.
+- **A fullscreen request from a window that is not focused** loses to the pointer: the stale enter event for the window under the pointer re-focuses it, which ends the fullscreen. That is the intended rule, so the X11 test uses the focused window, and the core tests cover the other case.
+- **Not done:** bars that are override-redirect are not tracked.
+- **Not verified:** a real bar (`tint2`, `polybar`) has not been run.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-03 | Initial entry | deltaog-117 |
+
+---
+
+### Wayland layer-shell: the layer map places, one list orders, the keyboard follows the surface that asks
+
+**Date:** 2026-11-03
+**Status:** Confirmed
+
+#### Context / Background
+
+Bars, launchers and wallpapers on Wayland are not windows: their client says where it wants to sit and how much space to keep clear, and the compositor places it. The core must hear only of the space.
+
+#### Decision & Rationale
+
+**Chosen Option:** use Smithay's layer map for placing and for the free zone, and turn that zone into insets for the core. It was the shortest correct path; writing the arrangement rules again would have copied behaviour that is easy to get wrong (margins, anchors, exclusive zones).
+
+#### Implementation Notes
+
+- **One list of layers, front to back,** now used for drawing, pointer hit-testing and frame callbacks: menus, overlay, fullscreen windows, top, other windows, bottom, background. A fullscreen window is above the top layer, so it hides bars, as on other compositors, but not an overlay.
+- **Arrange before the first configure.** The first commit carries the size the client asked for, so the layer map arranges first and the initial configure follows. Sending it first gave the client a size from before it had asked.
+- **From the zone to insets:** the zone is in the output's own coordinates, so the insets are its distances from the output's edges. The output's size is worked out the way Smithay does it, so the two agree after scaling.
+- **Keyboard:** the core's focus is remembered as the window focus. A surface with exclusive interactivity on the top or overlay layer holds the keyboard whatever the core says; one that asks on demand takes it when clicked, until the pointer enters a window. Without the last rule, a clicked bar would keep the keyboard for ever, since the core sends no focus change when the pointer re-enters the same window.
+- **Outputs:** a surface on an output that goes away is asked to close, as the protocol wants; the client can open another on a remaining output. A request with no output at all is closed at once.
+- **Popups of a bar** are tracked and given the geometry their positioner describes, without keeping them on the output.
+- **Fullscreen:** `xdg_toplevel` requests become events, also before the first commit (remembered until the window is announced). The state is set in the pending state when the scene says so and sent with the configure that sizes the window; windows whose state changed with no resize get a configure after all the changes.
+- **Xwayland:** requests by `_NET_WM_STATE` message reach the core. A program that sets the state before mapping is not seen as asking: Smithay keeps its own record of the state and never reads that property, so the check I first wrote there was always false and was removed.
+- **Test pitfall:** a test that discarded the events returned by `connect` also discarded the output report, so the engine had no screen and the scene was empty. The fixture helpers return them for that reason.
+- **Test flake, found and not fixed:** the Xwayland tests fail in about one run in four (3 of 12 on the previous commit) at `Fixture::start` with `Connection refused`. It is listed in the roadmap.
+- **Not done:** keyboard focus rules beyond exclusive and clicked, a surface that names no output goes to the first one, not the focused one; session lock.
+- **Not verified:** a real `waybar`, `fuzzel` or `swaybg` has not been run.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-03 | Initial entry | deltaog-117 |
