@@ -14,6 +14,8 @@ pub(crate) struct Windows {
     managed: HashSet<Window>,
     mapped: HashSet<Window>,
     expected_unmaps: HashMap<Window, u32>,
+    /// The windows whose `_NET_WM_STATE` says fullscreen because we put it there.
+    fullscreen: HashSet<Window>,
 }
 
 impl Windows {
@@ -31,7 +33,22 @@ impl Windows {
     pub(crate) fn forget(&mut self, window: Window) -> bool {
         self.mapped.remove(&window);
         self.expected_unmaps.remove(&window);
+        self.fullscreen.remove(&window);
         self.managed.remove(&window)
+    }
+
+    /// Records that `window` is, or is no longer, shown as fullscreen. `true` if that
+    /// changed what we had recorded, which is when its property needs writing.
+    pub(crate) fn set_fullscreen(&mut self, window: Window, on: bool) -> bool {
+        if on {
+            self.fullscreen.insert(window)
+        } else {
+            self.fullscreen.remove(&window)
+        }
+    }
+
+    pub(crate) fn is_fullscreen(&self, window: Window) -> bool {
+        self.fullscreen.contains(&window)
     }
 
     pub(crate) fn mark_mapped(&mut self, window: Window) {
@@ -73,6 +90,19 @@ mod tests {
         assert!(windows.mark_hidden(7));
         assert!(windows.take_expected_unmap(7));
         assert!(!windows.take_expected_unmap(7));
+    }
+
+    #[test]
+    fn fullscreen_is_recorded_once_and_forgotten_with_the_window() {
+        let mut windows = Windows::default();
+        windows.manage(7);
+        assert!(windows.set_fullscreen(7, true));
+        assert!(!windows.set_fullscreen(7, true));
+        assert!(windows.is_fullscreen(7));
+
+        windows.forget(7);
+        assert!(!windows.is_fullscreen(7));
+        assert!(!windows.set_fullscreen(7, false));
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! | Super+h / Super+l | narrow / widen the master column |
 //! | Super+Shift+1..9 | send the focused window to that workspace |
 //! | Super+f | float the focused window, or tile it again |
+//! | Super+Shift+f | make the focused window fullscreen, or put it back |
 //! | Super+Ctrl+h/j/k/l | move the floating window left / down / up / right |
 //! | Super+Ctrl+Shift+h/j/k/l | narrow / heighten / shorten / widen the floating window |
 //! | Super+left-drag | move the window under the pointer, if it floats |
@@ -22,6 +23,10 @@
 //! | Super+Shift+, / Super+Shift+. | send the focused window to the previous / next monitor |
 //! | Super+Shift+c | close the focused window |
 //! | Super+Shift+q | quit |
+//!
+//! Bars (windows of type dock, such as `polybar` or `tint2`) are left where they are, and
+//! the windows are tiled in the space they leave. A window that asks to be fullscreen, as
+//! a video player does, covers the whole screen, bars included, until it asks to go back.
 //!
 //! Three manage rules show the rule API: `Xmessage` windows are left to their client,
 //! `Firefox` opens on workspace 9 without switching to it, and dialogs open floating.
@@ -61,6 +66,7 @@ fn keymap(tags: &[Tag]) -> Result<Keymap> {
     keymap.bind(key('h', Modifiers::SUPER)?, Action::ShrinkMaster)?;
     keymap.bind(key('l', Modifiers::SUPER)?, Action::GrowMaster)?;
     keymap.bind(key('f', Modifiers::SUPER)?, Action::ToggleFloat)?;
+    keymap.bind(key('f', shifted)?, Action::ToggleFullscreen)?;
     let moving = Modifiers::SUPER | Modifiers::CTRL;
     let resizing = moving | Modifiers::SHIFT;
     for (letter, direction) in [

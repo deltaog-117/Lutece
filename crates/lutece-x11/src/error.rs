@@ -3,7 +3,7 @@
 use lutece::{KeyPress, Keysym, Modifiers, WinId};
 use std::io;
 use thiserror::Error;
-use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
+use x11rb::errors::{ConnectError, ConnectionError, ReplyError, ReplyOrIdError};
 
 /// Reasons the backend could not talk to the X server or carry out a request.
 #[derive(Debug, Error)]
@@ -18,6 +18,10 @@ pub enum Error {
     /// The X server refused a request we waited for an answer to.
     #[error("the X server refused a request: {0}")]
     Reply(#[from] ReplyError),
+    /// The window manager could not get a new resource id or the server refused a request
+    /// it waited for.
+    #[error("cannot create a window on the X server: {0}")]
+    Create(#[from] ReplyOrIdError),
     /// Only one client at a time may redirect window management on the root window.
     #[error("another window manager is already running on this display")]
     AnotherWindowManager,

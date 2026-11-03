@@ -5,7 +5,9 @@
 //! without the server still gets a green check; set `LUTECE_REQUIRE_X11=1` (as CI
 //! should) to make a missing server a failure instead.
 
+mod bars;
 mod drags;
+mod fullscreen;
 mod keys;
 mod monitors;
 mod rules;

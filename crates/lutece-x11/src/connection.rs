@@ -1,11 +1,12 @@
 //! The connection to the X server, and the backend built on it.
 
 use crate::apply::{Flow, execute, plan, run_effects};
+use crate::docks::{Reserve, Strut};
 use crate::drag::Drags;
 use crate::error::{Error, Result};
 use crate::grabs::{Keyboard, grab_drag_buttons, grab_keys, regrab_keys, release_drag_buttons};
 use crate::outputs;
-use crate::translate::{existing, key_press, translate};
+use crate::translate::{existing, fullscreen_request, key_press, translate};
 use crate::windows::Windows;
 use lutece::{Effect, Event, KeyPress, Modifiers, Scene, WindowInfo, diff};
 use std::mem;
@@ -15,10 +16,12 @@ use x11rb::errors::ReplyError;
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, EventMask, Mapping,
-    Window,
+    AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, CreateWindowAux,
+    EventMask, MapState, Mapping, PropMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
+use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT};
 
 x11rb::atom_manager! {
     pub(crate) Atoms: AtomsCookie {
@@ -26,6 +29,14 @@ x11rb::atom_manager! {
         WM_DELETE_WINDOW,
         UTF8_STRING,
         _NET_WM_NAME,
+        _NET_SUPPORTED,
+        _NET_SUPPORTING_WM_CHECK,
+        _NET_WM_STATE,
+        _NET_WM_STATE_FULLSCREEN,
+        _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_DOCK,
+        _NET_WM_STRUT,
+        _NET_WM_STRUT_PARTIAL,
     }
 }
 
@@ -49,6 +60,8 @@ pub struct X11Backend {
     /// The key combinations grabbed so far, to grab again after a keyboard remap.
     grabbed: Vec<KeyPress>,
     windows: Windows,
+    /// The bars, and what the core has been told they reserve.
+    reserve: Reserve,
     drags: Drags,
     /// What the X server is showing, so a new scene is applied as a difference.
     shown: Scene,
@@ -86,13 +99,18 @@ impl X11Backend {
         }
 
         let mut windows = Windows::default();
+        let mut reserve = Reserve::default();
         let monitors = outputs::watch(&conn, root)?;
-        let mut queued = vec![Event::OutputsChanged(outputs::query(
-            &conn, root, monitors,
-        )?)];
+        let reported = outputs::query(&conn, root, monitors)?;
+        reserve.set_outputs(&reported);
+        let mut queued = vec![Event::OutputsChanged(reported)];
         // Asked after the redirect is in place: a window that maps from now on sends a
         // map request, and one that mapped earlier is in this list, so none is missed.
-        queued.extend(existing_windows(&conn, &atoms, root, &mut windows)?);
+        let opened = existing_windows(&conn, &atoms, root, &mut windows, &mut reserve)?;
+        // The bars come before the windows, so the first scene already leaves them room.
+        queued.extend(reserve.changes(screen_size(&conn, root)?));
+        queued.extend(opened);
+        advertise(&conn, &atoms, root)?;
 
         Ok(Self {
             conn,
@@ -102,6 +120,7 @@ impl X11Backend {
             keyboard,
             grabbed: Vec::new(),
             windows,
+            reserve,
             drags: Drags::default(),
             shown: Scene::empty(),
             queued,
@@ -192,7 +211,7 @@ impl X11Backend {
     /// reported, or an error if the connection to the X server breaks.
     pub fn apply_scene(&mut self, scene: &Scene) -> Result<()> {
         let ops = plan(&mut self.windows, &diff(&self.shown, scene))?;
-        execute(&self.conn, self.root, &ops)?;
+        execute(&self.conn, &self.atoms, self.root, &ops)?;
         self.shown = scene.clone();
         Ok(())
     }
@@ -219,6 +238,7 @@ impl X11Backend {
             keyboard,
             grabbed,
             windows,
+            reserve,
             drags,
             queued,
             ..
@@ -262,9 +282,49 @@ impl X11Backend {
             XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_)
         ) {
             // The core takes the complete new set, so a repeated report is harmless.
-            queued.push(Event::OutputsChanged(outputs::query(
-                conn, *root, *monitors,
-            )?));
+            let reported = outputs::query(conn, *root, *monitors)?;
+            reserve.set_outputs(&reported);
+            queued.push(Event::OutputsChanged(reported));
+            queued.extend(reserve.changes(screen_size(conn, *root)?));
+            return Ok(());
+        }
+
+        if let XEvent::ClientMessage(message) = event {
+            queued.extend(fullscreen_request(
+                windows,
+                atoms._NET_WM_STATE,
+                atoms._NET_WM_STATE_FULLSCREEN,
+                message,
+            ));
+            return Ok(());
+        }
+
+        // Bars are not managed: they are shown where they ask, and only what they reserve
+        // reaches the core.
+        if let XEvent::MapRequest(request) = event
+            && (reserve.is_dock(request.window) || is_dock(conn, atoms, request.window))
+        {
+            track_dock(conn, atoms, reserve, request.window)?;
+            conn.map_window(request.window)?;
+            queued.extend(reserve.changes(screen_size(conn, *root)?));
+            return Ok(());
+        }
+        let gone = match event {
+            XEvent::UnmapNotify(unmap) => Some(unmap.window),
+            XEvent::DestroyNotify(destroy) => Some(destroy.window),
+            _ => None,
+        };
+        if gone.is_some_and(|window| reserve.remove_dock(window)) {
+            queued.extend(reserve.changes(screen_size(conn, *root)?));
+            return Ok(());
+        }
+        if let XEvent::PropertyNotify(change) = event {
+            let strut_changed =
+                change.atom == atoms._NET_WM_STRUT || change.atom == atoms._NET_WM_STRUT_PARTIAL;
+            if strut_changed && reserve.is_dock(change.window) {
+                track_dock(conn, atoms, reserve, change.window)?;
+                queued.extend(reserve.changes(screen_size(conn, *root)?));
+            }
             return Ok(());
         }
 
@@ -280,9 +340,13 @@ impl X11Backend {
             return Ok(());
         }
 
-        queued.extend(translate(windows, event, |window| {
-            adopt(conn, atoms, window)
-        }));
+        let opened = translate(windows, event, |window| adopt(conn, atoms, window));
+        // A window may ask to start fullscreen by setting its state before it maps.
+        let fullscreen = opened
+            .as_ref()
+            .and_then(|event| starts_fullscreen(conn, atoms, event));
+        queued.extend(opened);
+        queued.extend(fullscreen);
         Ok(())
     }
 }
@@ -299,6 +363,7 @@ fn existing_windows(
     atoms: &Atoms,
     root: Window,
     windows: &mut Windows,
+    reserve: &mut Reserve,
 ) -> Result<Vec<Event>> {
     let children = conn.query_tree(root)?.reply()?.children;
     // Ask about all of them before reading any answer, to save a round trip each.
@@ -313,15 +378,135 @@ fn existing_windows(
         let Ok(attributes) = cookie.reply() else {
             continue;
         };
-        events.extend(existing(
+        // A bar that was already showing is tracked, not managed.
+        let showing = attributes.map_state == MapState::VIEWABLE && !attributes.override_redirect;
+        if showing && is_dock(conn, atoms, child) {
+            track_dock(conn, atoms, reserve, child)?;
+            continue;
+        }
+        let opened = existing(
             windows,
             child,
             attributes.map_state,
             attributes.override_redirect,
             |window| adopt(conn, atoms, window),
-        ));
+        );
+        let fullscreen = opened
+            .as_ref()
+            .and_then(|event| starts_fullscreen(conn, atoms, event));
+        events.extend(opened);
+        events.extend(fullscreen);
     }
     Ok(events)
+}
+
+/// The size of the whole X screen, which bars measure their struts from.
+fn screen_size(conn: &RustConnection, root: Window) -> Result<(u32, u32)> {
+    let geometry = conn.get_geometry(root)?.reply()?;
+    Ok((u32::from(geometry.width), u32::from(geometry.height)))
+}
+
+/// The values of a property of 32-bit numbers, or none if it is not set or the window is
+/// gone.
+fn cardinals(conn: &RustConnection, window: Window, property: u32, kind: AtomEnum) -> Vec<u32> {
+    conn.get_property(false, window, property, kind, 0, 64)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|reply| reply.value32().map(Iterator::collect))
+        .unwrap_or_default()
+}
+
+/// Whether `window` says it is a bar (`_NET_WM_WINDOW_TYPE_DOCK`).
+fn is_dock(conn: &RustConnection, atoms: &Atoms, window: Window) -> bool {
+    cardinals(conn, window, atoms._NET_WM_WINDOW_TYPE, AtomEnum::ATOM)
+        .contains(&atoms._NET_WM_WINDOW_TYPE_DOCK)
+}
+
+/// Starts tracking a bar, or reads again what it reserves, and listens for it to change.
+fn track_dock(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    reserve: &mut Reserve,
+    window: Window,
+) -> Result<()> {
+    // The window can be destroyed while we ask; its destruction then arrives as an event.
+    let _ = conn.change_window_attributes(
+        window,
+        &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+    );
+    let partial = cardinals(
+        conn,
+        window,
+        atoms._NET_WM_STRUT_PARTIAL,
+        AtomEnum::CARDINAL,
+    );
+    let plain = cardinals(conn, window, atoms._NET_WM_STRUT, AtomEnum::CARDINAL);
+    reserve.set_dock(window, Strut::from_properties(&partial, &plain));
+    Ok(())
+}
+
+/// The request to make a window fullscreen, if it was just opened with that state set.
+fn starts_fullscreen(conn: &RustConnection, atoms: &Atoms, opened: &Event) -> Option<Event> {
+    let Event::WindowOpened { id, .. } = opened else {
+        return None;
+    };
+    let window = Window::try_from(id.get()).ok()?;
+    cardinals(conn, window, atoms._NET_WM_STATE, AtomEnum::ATOM)
+        .contains(&atoms._NET_WM_STATE_FULLSCREEN)
+        .then_some(Event::FullscreenRequested { id: *id, on: true })
+}
+
+/// Tells clients which parts of EWMH this window manager honours. Toolkits decide from
+/// this list whether to ask for fullscreen with `_NET_WM_STATE` or to resize the window
+/// themselves, and they look for the check window to know a window manager is there.
+fn advertise(conn: &RustConnection, atoms: &Atoms, root: Window) -> Result<()> {
+    let check = conn.generate_id()?;
+    conn.create_window(
+        COPY_DEPTH_FROM_PARENT,
+        check,
+        root,
+        -1,
+        -1,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        COPY_FROM_PARENT,
+        &CreateWindowAux::new().override_redirect(1),
+    )?;
+    for window in [root, check] {
+        conn.change_property32(
+            PropMode::REPLACE,
+            window,
+            atoms._NET_SUPPORTING_WM_CHECK,
+            AtomEnum::WINDOW,
+            &[check],
+        )?;
+    }
+    conn.change_property8(
+        PropMode::REPLACE,
+        check,
+        atoms._NET_WM_NAME,
+        atoms.UTF8_STRING,
+        b"lutece",
+    )?;
+    conn.change_property32(
+        PropMode::REPLACE,
+        root,
+        atoms._NET_SUPPORTED,
+        AtomEnum::ATOM,
+        &[
+            atoms._NET_SUPPORTING_WM_CHECK,
+            atoms._NET_WM_STATE,
+            atoms._NET_WM_STATE_FULLSCREEN,
+            atoms._NET_WM_WINDOW_TYPE,
+            atoms._NET_WM_WINDOW_TYPE_DOCK,
+            atoms._NET_WM_STRUT,
+            atoms._NET_WM_STRUT_PARTIAL,
+        ],
+    )?;
+    conn.flush()?;
+    Ok(())
 }
 
 /// Subscribes to a new window's pointer events and describes it.

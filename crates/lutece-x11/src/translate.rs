@@ -4,7 +4,9 @@ use crate::grabs::{Keyboard, modifiers_of};
 use crate::windows::Windows;
 use lutece::{Event, KeyPress, WinId, WindowInfo};
 use x11rb::protocol::Event as XEvent;
-use x11rb::protocol::xproto::{KeyPressEvent, MapState, NotifyDetail, NotifyMode, Window};
+use x11rb::protocol::xproto::{
+    Atom, ClientMessageEvent, KeyPressEvent, MapState, NotifyDetail, NotifyMode, Window,
+};
 
 pub(crate) fn win_id(window: Window) -> WinId {
     WinId::new(u64::from(window))
@@ -49,6 +51,43 @@ pub(crate) fn translate(
         }
         _ => None,
     }
+}
+
+/// `_NET_WM_STATE` action: take the listed states away.
+const STATE_REMOVE: u32 = 0;
+/// `_NET_WM_STATE` action: add them.
+const STATE_ADD: u32 = 1;
+/// `_NET_WM_STATE` action: switch them.
+const STATE_TOGGLE: u32 = 2;
+
+/// Turns a `_NET_WM_STATE` client message that names the fullscreen state into the
+/// request it means. `state` and `fullscreen` are the two atoms. Messages about other
+/// states, about windows we do not manage, or in the wrong format produce nothing.
+///
+/// A toggle is worked out from what we last showed, since the message does not say.
+pub(crate) fn fullscreen_request(
+    windows: &Windows,
+    state: Atom,
+    fullscreen: Atom,
+    message: &ClientMessageEvent,
+) -> Option<Event> {
+    if message.type_ != state || message.format != 32 || !windows.is_managed(message.window) {
+        return None;
+    }
+    let [action, first, second, ..] = message.data.as_data32();
+    if first != fullscreen && second != fullscreen {
+        return None;
+    }
+    let on = match action {
+        STATE_REMOVE => false,
+        STATE_ADD => true,
+        STATE_TOGGLE => !windows.is_fullscreen(message.window),
+        _ => return None,
+    };
+    Some(Event::FullscreenRequested {
+        id: win_id(message.window),
+        on,
+    })
 }
 
 /// Turns a window that was already on screen when the backend started into the event
@@ -160,6 +199,48 @@ mod tests {
 
     fn run(windows: &mut Windows, event: &XEvent) -> Option<Event> {
         translate(windows, event, |_| WindowInfo::default())
+    }
+
+    const STATE: Atom = 300;
+    const FULLSCREEN: Atom = 301;
+
+    fn state_message(window: Window, action: u32, atoms: [Atom; 2]) -> ClientMessageEvent {
+        ClientMessageEvent::new(32, window, STATE, [action, atoms[0], atoms[1], 1, 0])
+    }
+
+    #[test]
+    fn a_state_message_adds_removes_and_toggles_fullscreen() {
+        let mut windows = Windows::default();
+        windows.manage(7);
+        let ask = |windows: &Windows, action, atoms| {
+            fullscreen_request(windows, STATE, FULLSCREEN, &state_message(7, action, atoms))
+        };
+        let want = |on| Some(Event::FullscreenRequested { id: win_id(7), on });
+
+        assert_eq!(ask(&windows, STATE_ADD, [FULLSCREEN, 0]), want(true));
+        assert_eq!(ask(&windows, STATE_REMOVE, [FULLSCREEN, 0]), want(false));
+        // The atom may sit in either slot, as GTK and Qt send it differently.
+        assert_eq!(ask(&windows, STATE_ADD, [5, FULLSCREEN]), want(true));
+
+        assert_eq!(ask(&windows, STATE_TOGGLE, [FULLSCREEN, 0]), want(true));
+        windows.set_fullscreen(7, true);
+        assert_eq!(ask(&windows, STATE_TOGGLE, [FULLSCREEN, 0]), want(false));
+    }
+
+    #[test]
+    fn other_states_other_windows_and_odd_messages_are_ignored() {
+        let mut windows = Windows::default();
+        windows.manage(7);
+        let ask =
+            |message: &ClientMessageEvent| fullscreen_request(&windows, STATE, FULLSCREEN, message);
+
+        assert_eq!(ask(&state_message(7, STATE_ADD, [5, 6])), None);
+        assert_eq!(ask(&state_message(8, STATE_ADD, [FULLSCREEN, 0])), None);
+        assert_eq!(ask(&state_message(7, 9, [FULLSCREEN, 0])), None);
+        let wrong_type = ClientMessageEvent::new(32, 7, 999_u32, [STATE_ADD, FULLSCREEN, 0, 0, 0]);
+        assert_eq!(ask(&wrong_type), None);
+        let bytes = ClientMessageEvent::new(8, 7, STATE, [0u8; 20]);
+        assert_eq!(ask(&bytes), None);
     }
 
     #[test]

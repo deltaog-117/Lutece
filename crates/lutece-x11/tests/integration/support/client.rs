@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
 use x11rb::protocol::xproto::{
-    AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt, CreateWindowAux,
-    KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState, PropMode, Window,
-    WindowClass,
+    AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ClientMessageEvent, ConnectionExt,
+    CreateWindowAux, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState,
+    PropMode, Window, WindowClass,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -45,6 +45,9 @@ pub struct Spec {
     asked: Geometry,
     class: Option<&'static str>,
     transient_for: Option<Window>,
+    /// The twelve values of `_NET_WM_STRUT_PARTIAL`, for a window that is a bar.
+    bar: Option<[u32; 12]>,
+    fullscreen: bool,
 }
 
 impl Spec {
@@ -54,7 +57,31 @@ impl Spec {
             asked: Geometry::new(x, y, width, height),
             class: None,
             transient_for: None,
+            bar: None,
+            fullscreen: false,
         }
+    }
+
+    /// Makes the window a bar (type dock) reserving `depth` pixels along the top edge.
+    pub const fn top_bar(mut self, depth: u32) -> Self {
+        self.bar = Some(strut_partial(depth, u32::MAX));
+        self
+    }
+
+    /// Makes the window a bar reserving `depth` pixels along the top edge, from pixel
+    /// column `from` to `to` (inclusive).
+    pub const fn top_bar_between(mut self, depth: u32, from: u32, to: u32) -> Self {
+        let mut strut = strut_partial(depth, to);
+        strut[8] = from;
+        self.bar = Some(strut);
+        self
+    }
+
+    /// Sets `_NET_WM_STATE` to fullscreen before the window maps, as a video player that
+    /// starts fullscreen does.
+    pub const fn fullscreen(mut self) -> Self {
+        self.fullscreen = true;
+        self
     }
 
     /// Sets the window's `WM_CLASS` class.
@@ -68,6 +95,11 @@ impl Spec {
         self.transient_for = Some(parent);
         self
     }
+}
+
+/// `_NET_WM_STRUT_PARTIAL` for a bar along the top edge up to column `end`.
+const fn strut_partial(depth: u32, end: u32) -> [u32; 12] {
+    [0, 0, depth, 0, 0, 0, 0, 0, 0, end, 0, 0]
 }
 
 impl Default for Spec {
@@ -154,9 +186,90 @@ impl Client {
                 )
                 .expect("set WM_TRANSIENT_FOR");
         }
+        if let Some(strut) = spec.bar {
+            self.set_atoms(window, "_NET_WM_WINDOW_TYPE", &["_NET_WM_WINDOW_TYPE_DOCK"]);
+            self.set_strut(window, strut);
+        }
+        if spec.fullscreen {
+            self.set_atoms(window, "_NET_WM_STATE", &["_NET_WM_STATE_FULLSCREEN"]);
+        }
         self.conn.map_window(window).expect("map_window");
         self.round_trip();
         window
+    }
+
+    /// Changes what a bar reserves, as a panel does when it resizes.
+    pub fn set_strut(&self, window: Window, strut: [u32; 12]) {
+        self.conn
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                self.atom("_NET_WM_STRUT_PARTIAL"),
+                AtomEnum::CARDINAL,
+                &strut,
+            )
+            .expect("set _NET_WM_STRUT_PARTIAL");
+        self.round_trip();
+    }
+
+    /// Asks the window manager, as a client does, to add (1), remove (0) or toggle (2) the
+    /// fullscreen state of `window`.
+    pub fn request_fullscreen(&self, window: Window, action: u32) {
+        let message = ClientMessageEvent::new(
+            32,
+            window,
+            self.atom("_NET_WM_STATE"),
+            [action, self.atom("_NET_WM_STATE_FULLSCREEN"), 0, 1, 0],
+        );
+        let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+        self.conn
+            .send_event(false, self.root, mask, message)
+            .expect("send _NET_WM_STATE");
+        self.round_trip();
+    }
+
+    /// Whether the window's `_NET_WM_STATE` says fullscreen.
+    pub fn is_fullscreen(&self, window: Window) -> bool {
+        self.atoms_of(window, "_NET_WM_STATE")
+            .contains(&self.atom("_NET_WM_STATE_FULLSCREEN"))
+    }
+
+    /// The names of the EWMH hints the window manager lists as supported.
+    pub fn supported(&self, name: &str) -> bool {
+        self.atoms_of(self.root, "_NET_SUPPORTED")
+            .contains(&self.atom(name))
+    }
+
+    fn atom(&self, name: &str) -> u32 {
+        self.conn
+            .intern_atom(false, name.as_bytes())
+            .expect("intern request")
+            .reply()
+            .expect("intern reply")
+            .atom
+    }
+
+    fn set_atoms(&self, window: Window, property: &str, values: &[&str]) {
+        let values: Vec<u32> = values.iter().map(|name| self.atom(name)).collect();
+        self.conn
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                self.atom(property),
+                AtomEnum::ATOM,
+                &values,
+            )
+            .expect("set an atom property");
+    }
+
+    fn atoms_of(&self, window: Window, property: &str) -> Vec<u32> {
+        self.conn
+            .get_property(false, window, self.atom(property), AtomEnum::ATOM, 0, 64)
+            .expect("get_property request")
+            .reply()
+            .ok()
+            .and_then(|reply| reply.value32().map(Iterator::collect))
+            .unwrap_or_default()
     }
 
     /// Splits the screen into a left and a right monitor of equal width, with RandR 1.5.

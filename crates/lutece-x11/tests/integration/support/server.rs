@@ -59,6 +59,10 @@ impl XServer {
                     "-screen",
                     "0",
                     &screen,
+                    // Without it the server restarts when its last client leaves, which
+                    // is right after the readiness probe below, and the test client's own
+                    // connection then lands in the restart and is reset.
+                    "-noreset",
                     "-nolisten",
                     "tcp",
                 ])

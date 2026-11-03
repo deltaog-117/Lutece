@@ -25,6 +25,7 @@
 
 mod apply;
 mod connection;
+mod docks;
 mod drag;
 mod error;
 mod grabs;

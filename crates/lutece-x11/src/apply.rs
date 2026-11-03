@@ -11,8 +11,9 @@ use std::process::Command;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt, EventMask, InputFocus,
-    StackMode, Window,
+    PropMode, StackMode, Window,
 };
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{CURRENT_TIME, NONE};
 
 /// Whether the window manager should keep running after effects were applied.
@@ -27,11 +28,19 @@ pub enum Flow {
 /// One X request, described without a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Op {
-    Place { window: Window, rect: Rect },
+    Place {
+        window: Window,
+        rect: Rect,
+    },
     Map(Window),
     Unmap(Window),
     Raise(Window),
     Focus(Option<Window>),
+    /// Add or remove the fullscreen state in the window's `_NET_WM_STATE`.
+    SetFullscreen {
+        window: Window,
+        on: bool,
+    },
 }
 
 fn window_of(id: WinId) -> Result<Window> {
@@ -49,6 +58,12 @@ pub(crate) fn plan(windows: &mut Windows, changes: &[Change]) -> Result<Vec<Op>>
         match change {
             Change::Hide(id) => {
                 let window = window_of(*id)?;
+                // The core forgets a hidden window's fullscreen state, so the property
+                // must go too, or a client that left fullscreen while hidden would come
+                // back claiming it.
+                if windows.set_fullscreen(window, false) {
+                    ops.push(Op::SetFullscreen { window, on: false });
+                }
                 if windows.mark_hidden(window) {
                     ops.push(Op::Unmap(window));
                 }
@@ -83,6 +98,12 @@ pub(crate) fn plan(windows: &mut Windows, changes: &[Change]) -> Result<Vec<Op>>
                     }
                 }
             }
+            Change::Fullscreen { id, on } => {
+                let window = window_of(*id)?;
+                if windows.is_managed(window) && windows.set_fullscreen(window, *on) {
+                    ops.push(Op::SetFullscreen { window, on: *on });
+                }
+            }
             Change::Focus(id) => {
                 let window = id.map(window_of).transpose()?;
                 ops.push(Op::Focus(window.filter(|w| windows.is_managed(*w))));
@@ -96,7 +117,12 @@ pub(crate) fn plan(windows: &mut Windows, changes: &[Change]) -> Result<Vec<Op>>
 
 /// Sends `ops` to the X server. Requests for windows that vanished meanwhile fail on the
 /// server side and arrive later as error events, which the translator ignores.
-pub(crate) fn execute(conn: &impl Connection, root: Window, ops: &[Op]) -> Result<()> {
+pub(crate) fn execute(
+    conn: &impl Connection,
+    atoms: &Atoms,
+    root: Window,
+    ops: &[Op],
+) -> Result<()> {
     for op in ops {
         match *op {
             Op::Place { window, rect } => {
@@ -127,10 +153,55 @@ pub(crate) fn execute(conn: &impl Connection, root: Window, ops: &[Op]) -> Resul
             Op::Focus(None) => {
                 conn.set_input_focus(InputFocus::POINTER_ROOT, root, CURRENT_TIME)?;
             }
+            Op::SetFullscreen { window, on } => set_fullscreen_state(conn, atoms, window, on)?,
         }
     }
     conn.flush()?;
     Ok(())
+}
+
+/// Adds or removes the fullscreen state in `window`'s `_NET_WM_STATE`, leaving the other
+/// states the client set (maximized, sticky, and so on) as they are.
+fn set_fullscreen_state(
+    conn: &impl Connection,
+    atoms: &Atoms,
+    window: Window,
+    on: bool,
+) -> Result<()> {
+    // A window that is gone has no property to read; its writes then fail on the server
+    // and arrive as error events, which the translator ignores.
+    let current: Vec<u32> = conn
+        .get_property(false, window, atoms._NET_WM_STATE, AtomEnum::ATOM, 0, 64)?
+        .reply()
+        .ok()
+        .and_then(|reply| reply.value32().map(Iterator::collect))
+        .unwrap_or_default();
+    let states = states_with_fullscreen(&current, atoms._NET_WM_STATE_FULLSCREEN, on);
+    if states.is_empty() {
+        conn.delete_property(window, atoms._NET_WM_STATE)?;
+    } else {
+        conn.change_property32(
+            PropMode::REPLACE,
+            window,
+            atoms._NET_WM_STATE,
+            AtomEnum::ATOM,
+            &states,
+        )?;
+    }
+    Ok(())
+}
+
+/// `current` with the fullscreen atom present exactly when `on`, other states untouched.
+fn states_with_fullscreen(current: &[u32], fullscreen: u32, on: bool) -> Vec<u32> {
+    let mut states: Vec<u32> = current
+        .iter()
+        .copied()
+        .filter(|state| *state != fullscreen)
+        .collect();
+    if on {
+        states.push(fullscreen);
+    }
+    states
 }
 
 /// Carries out `effects` in order, stopping at the first [`Effect::Quit`].
@@ -222,6 +293,7 @@ mod tests {
         /// Every window we ever mapped, bottom to top, whether or not it is mapped now.
         stacking: Vec<Window>,
         focus: Option<Window>,
+        fullscreen: HashSet<Window>,
     }
 
     impl FakeServer {
@@ -245,6 +317,13 @@ mod tests {
                         self.stacking.push(window);
                     }
                     Op::Focus(window) => self.focus = window,
+                    Op::SetFullscreen { window, on } => {
+                        if on {
+                            self.fullscreen.insert(window);
+                        } else {
+                            self.fullscreen.remove(&window);
+                        }
+                    }
                 }
             }
         }
@@ -268,8 +347,9 @@ mod tests {
                 0..8,
             ),
             proptest::option::of(any::<usize>()),
+            0u32..4,
         )
-            .prop_map(|(raw, pick)| {
+            .prop_map(|(raw, pick, salt)| {
                 let mut seen = HashSet::new();
                 let placements: Vec<Placement> = raw
                     .into_iter()
@@ -282,7 +362,14 @@ mod tests {
                 let focus = pick
                     .filter(|_| !placements.is_empty())
                     .map(|pick| placements[pick % placements.len()].id);
-                Scene::try_new(placements, focus).expect("ids are deduplicated, focus is listed")
+                let fullscreen: Vec<WinId> = placements
+                    .iter()
+                    .filter(|p| p.id.get() % 3 == u64::from(salt) % 3)
+                    .map(|p| p.id)
+                    .collect();
+                Scene::try_new(placements, focus)
+                    .and_then(|scene| scene.with_fullscreen(fullscreen))
+                    .expect("ids are deduplicated, focus and fullscreen are listed")
             })
     }
 
@@ -313,9 +400,50 @@ mod tests {
                     scene.placements().iter().map(|p| window_of(p.id).expect("small id")).collect();
                 prop_assert_eq!(server.visible_order(), order);
                 prop_assert_eq!(server.focus, scene.focus().map(|id| window_of(id).expect("small id")));
+                // Only the windows on screen carry the state, as the scene says.
+                let fullscreen: HashSet<Window> = scene
+                    .placements()
+                    .iter()
+                    .filter(|p| scene.is_fullscreen(p.id))
+                    .map(|p| window_of(p.id).expect("small id"))
+                    .collect();
+                prop_assert_eq!(&server.fullscreen, &fullscreen);
                 previous = scene;
             }
         }
+    }
+
+    #[test]
+    fn the_fullscreen_state_is_added_and_removed_without_touching_the_others() {
+        assert_eq!(states_with_fullscreen(&[5, 6], 9, true), [5, 6, 9]);
+        assert_eq!(states_with_fullscreen(&[5, 9, 6], 9, false), [5, 6]);
+        assert_eq!(states_with_fullscreen(&[5, 9], 9, true), [5, 9]);
+        assert_eq!(states_with_fullscreen(&[], 9, false), []);
+    }
+
+    #[test]
+    fn a_fullscreen_window_that_is_hidden_loses_the_state_before_it_is_unmapped() {
+        let mut windows = Windows::default();
+        windows.manage(3);
+        let rect = Rect::new(0, 0, 10, 10).expect("non-zero size");
+        let id = win_id(3);
+        let shown = [
+            Change::Fullscreen { id, on: true },
+            Change::Show(Placement { id, rect }),
+        ];
+        plan(&mut windows, &shown).expect("fits");
+
+        let ops = plan(&mut windows, &[Change::Hide(id)]).expect("fits");
+        assert_eq!(
+            ops,
+            [
+                Op::SetFullscreen {
+                    window: 3,
+                    on: false
+                },
+                Op::Unmap(3)
+            ]
+        );
     }
 
     #[test]

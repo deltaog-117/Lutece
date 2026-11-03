@@ -60,3 +60,23 @@ fn super_period_moves_the_focus_so_new_windows_open_on_the_other_monitor() {
     session.client.expect_geometry(second, RIGHT);
     session.client.expect_geometry(first, LEFT);
 }
+
+#[test]
+fn a_bar_over_one_monitor_keeps_space_clear_on_that_monitor_only() {
+    let Some(session) = two_monitors() else {
+        return;
+    };
+    // The bar covers the left monitor's columns 0..=639, so its strut touches only that one.
+    let half = SCREEN_WIDTH / 2;
+    session
+        .client
+        .open(Spec::at(0, 0, half, 30).top_bar_between(30, 0, u32::from(half) - 1));
+    let left = session.client.open(Spec::default());
+    session.client.press(&[SUPER], key('.'));
+    let right = session.client.open(Spec::default());
+
+    session
+        .client
+        .expect_geometry(left, Geometry::new(0, 30, half, SCREEN_HEIGHT - 30));
+    session.client.expect_geometry(right, RIGHT);
+}
