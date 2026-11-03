@@ -6,8 +6,9 @@
 
 use crate::compositor::{State, set_activated};
 use crate::error::{Error, Result};
-use crate::windows::Shell;
+use crate::windows::{Entry, Shell};
 use lutece::{Change, Effect, Placement, SpawnCommand, WinId};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::Rectangle;
 use std::ffi::OsStr;
 use std::process::Command;
@@ -23,13 +24,28 @@ pub enum Flow {
 
 /// Carries out the changes that turn the previous scene into the next one.
 pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
+    // Windows whose fullscreen state changed. The state rides on the configure that
+    // places the window, when there is one; the rest get theirs after all the changes.
+    let mut restated = Vec::new();
     for change in changes {
         match change {
             Change::Hide(id) => {
                 if let Some(entry) = state.windows.get_mut(*id) {
                     entry.rect = None;
+                    // The core forgets a hidden window's fullscreen state, so the client
+                    // is told, or it would come back believing it still has it.
+                    if set_fullscreen(entry, false) {
+                        restated.push(*id);
+                    }
                 }
                 state.refresh_presence(*id);
+            }
+            Change::Fullscreen { id, on } => {
+                if let Some(entry) = state.windows.get_mut(*id)
+                    && set_fullscreen(entry, *on)
+                {
+                    restated.push(*id);
+                }
             }
             Change::Show(placement) | Change::Move(placement) => place(state, placement),
             Change::Restack(order) => state.windows.restack(order),
@@ -38,6 +54,37 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
             _ => {}
         }
     }
+    for id in restated {
+        if let Some(Entry {
+            shell: Shell::Xdg(toplevel),
+            ..
+        }) = state.windows.get(id)
+        {
+            // Nothing is sent if the configure that placed the window already said it.
+            toplevel.send_pending_configure();
+        }
+    }
+}
+
+/// Tells the window's client it is fullscreen (`on`) or not. Returns whether that was a
+/// change; for a Wayland window the new state is sent with its next configure.
+fn set_fullscreen(entry: &mut Entry, on: bool) -> bool {
+    if entry.fullscreen == on {
+        return false;
+    }
+    entry.fullscreen = on;
+    match &entry.shell {
+        Shell::Xdg(toplevel) => toplevel.with_pending_state(|pending| {
+            if on {
+                pending.states.set(xdg_toplevel::State::Fullscreen);
+            } else {
+                pending.states.unset(xdg_toplevel::State::Fullscreen);
+            }
+        }),
+        // If the program is gone, the core learns of it from the close event.
+        Shell::X11(window) => drop(window.set_fullscreen(on)),
+    }
+    true
 }
 
 fn place(state: &mut State, placement: &Placement) {
@@ -82,10 +129,11 @@ fn focus(state: &mut State, focused: Option<WinId>) {
             Shell::X11(window) => drop(window.set_activated(active)),
         }
     }
-    let target = focused
+    state.window_focus = focused
         .and_then(|id| state.windows.get(id))
         .and_then(|entry| entry.shell.focus());
-    state.set_keyboard_focus(target);
+    // A layer surface that holds the keyboard keeps it; otherwise this window gets it.
+    state.refresh_keyboard_focus();
 }
 
 /// Carries out effects. `socket` is the display name spawned programs must connect to.

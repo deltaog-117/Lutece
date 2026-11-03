@@ -91,7 +91,8 @@ impl WaylandBackend {
     pub fn bind(size: Size) -> Result<Self> {
         let display = Display::<State>::new()?;
         let handle = display.handle();
-        let event_loop = EventLoop::try_new().map_err(|error| io::Error::other(error.to_string()))?;
+        let event_loop =
+            EventLoop::try_new().map_err(|error| io::Error::other(error.to_string()))?;
         let state = State::new(&handle, event_loop.handle())?;
         let listener = ListeningSocket::bind_auto(SOCKET_BASE, SOCKET_TRIES)?;
         let mut backend = Self {
@@ -172,6 +173,7 @@ impl WaylandBackend {
             show_area(&screen.output, screen.rect, scale);
         }
         self.state.refresh_all_presence();
+        self.state.arrange_layers();
     }
 
     /// Offers clients GPU buffers (`linux-dmabuf`) on the GPU `support` describes, which
@@ -205,6 +207,7 @@ impl WaylandBackend {
             kept
         });
         self.state.leave_outputs(&gone);
+        self.state.close_layers_of(&gone);
         let scale = self.state.scale;
         for output in outputs {
             match self
@@ -244,7 +247,16 @@ impl WaylandBackend {
                 Some((output.rect, screen.output.clone()))
             })
             .collect();
+        self.state.output_ids = outputs
+            .iter()
+            .filter_map(|output| {
+                let screen = self.screens.iter().find(|screen| screen.id == output.id)?;
+                Some((output.id, screen.output.clone()))
+            })
+            .collect();
         self.state.refresh_all_presence();
+        // Layer surfaces keep to the new areas, and the core hears what they reserve.
+        self.state.arrange_layers();
         self.state.report_outputs(outputs.to_vec());
     }
 
@@ -349,7 +361,7 @@ impl WaylandBackend {
         R: Renderer + ImportAll,
         R::TextureId: Clone + 'static,
     {
-        crate::render::surface_elements(&self.state.windows, renderer, self.state.scale)
+        crate::render::surface_elements(&self.state.layers(), renderer, self.state.scale)
     }
 
     /// What to draw for a cursor image a client supplied, if it did.
@@ -373,7 +385,7 @@ impl WaylandBackend {
 
     /// Tells clients a frame was shown, so they draw the next one.
     pub(crate) fn send_frame_callbacks(&mut self, time_ms: u32) -> Result<()> {
-        crate::render::send_frame_callbacks(&self.state.windows, time_ms);
+        crate::render::send_frame_callbacks(&self.state.layers(), time_ms);
         self.display.flush_clients()?;
         Ok(())
     }
@@ -404,6 +416,7 @@ impl WaylandBackend {
             .map_err(|error| io::Error::other(error.to_string()))?;
         self.display.dispatch_clients(&mut self.state)?;
         self.state.popups.cleanup();
+        self.state.cleanup_layers();
         self.display.flush_clients()?;
         Ok(())
     }

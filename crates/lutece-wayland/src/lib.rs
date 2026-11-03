@@ -29,6 +29,7 @@ mod dmabuf;
 mod error;
 mod focus;
 mod input;
+mod layers;
 mod nested;
 mod pointer;
 mod popup;

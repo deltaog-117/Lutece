@@ -59,6 +59,18 @@ impl State {
         }
     }
 
+    /// Tells the surface tree under `root`, and its popups, the integer scale to draw at.
+    /// Layer surfaces are put on their output by the layer map; this is the part of
+    /// presence that is left for them.
+    pub(crate) fn tell_scale(&self, root: &WlSurface) {
+        let integer = self.scale.integer();
+        for surface in window_surfaces(root) {
+            with_states(&surface, |states| {
+                send_surface_state(&surface, states, integer, Transform::Normal);
+            });
+        }
+    }
+
     /// [`refresh_presence`](Self::refresh_presence) for every managed window, after the
     /// outputs or the scale changed.
     pub(crate) fn refresh_all_presence(&self) {

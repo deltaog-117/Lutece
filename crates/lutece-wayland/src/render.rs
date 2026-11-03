@@ -2,7 +2,7 @@
 //! shown.
 
 use crate::scale::Scale;
-use crate::windows::Windows;
+use crate::windows::Layer;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
@@ -31,7 +31,7 @@ render_elements! {
 /// a shadow or a frame of its own around its window cannot spill over its neighbours.
 /// Popups are not cut, since a menu may reach past its window.
 pub(crate) fn surface_elements<R>(
-    windows: &Windows,
+    layers: &[Layer],
     renderer: &mut R,
     scale: Scale,
 ) -> Vec<SceneElement<R>>
@@ -39,9 +39,8 @@ where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
 {
-    windows
-        .layers()
-        .into_iter()
+    layers
+        .iter()
         .flat_map(|layer| {
             let drawn: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
                 renderer,
@@ -100,8 +99,8 @@ where
 
 /// Answers the frame callbacks of every window and popup. A client asks for one to
 /// learn when it may draw again; without the answer it would draw once and wait forever.
-pub(crate) fn send_frame_callbacks(windows: &Windows, time_ms: u32) {
-    for layer in windows.layers() {
+pub(crate) fn send_frame_callbacks(layers: &[Layer], time_ms: u32) {
+    for layer in layers {
         with_surface_tree_downward(
             &layer.surface,
             (),

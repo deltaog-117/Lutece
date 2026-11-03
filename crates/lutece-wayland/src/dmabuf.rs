@@ -11,10 +11,10 @@
 
 use crate::compositor::State;
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::backend::egl::EGLDevice;
 use smithay::backend::renderer::ImportDma;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::delegate_dmabuf;
 use smithay::wayland::dmabuf::{
     DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,

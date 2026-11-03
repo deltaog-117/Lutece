@@ -118,6 +118,9 @@ impl State {
         }
         if pressed {
             self.dismiss_popup_grabs();
+            // A bar or launcher that takes the keyboard when clicked gets it now.
+            let clicked = self.surface_under(self.pointer.location);
+            self.click_on(clicked.as_ref().map(|hit| &hit.surface));
         }
         let Some(pointer) = self.seat.get_pointer() else {
             return;
@@ -161,6 +164,8 @@ impl State {
         self.pointer.over = over;
         if let Some(id) = over {
             self.events.push(Event::FocusRequested(id));
+            // Entering a window gives the keyboard back to the core's focus.
+            self.release_layer_focus();
         }
     }
 
@@ -249,7 +254,7 @@ impl State {
     /// The topmost surface at `location`: popups above their window, windows in
     /// stacking order.
     fn surface_under(&self, location: Point<f64, Logical>) -> Option<Hit> {
-        self.windows.layers().into_iter().find_map(|layer| {
+        self.layers().into_iter().find_map(|layer| {
             under_from_surface_tree(
                 &layer.surface,
                 location,

@@ -15,6 +15,7 @@
 //! | Alt+h / Alt+l | narrow / widen the master column |
 //! | Alt+Shift+1..9 | send the focused window to that workspace |
 //! | Alt+f | float the focused window, or tile it again |
+//! | Alt+Shift+f | make the focused window fullscreen, or put it back |
 //! | Alt+, / Alt+. | focus the previous / next output |
 //! | Alt+Shift+, / Alt+Shift+. | send the focused window to the previous / next output |
 //! | Alt+left-drag | move the window under the pointer, if it floats |
@@ -72,6 +73,7 @@ fn keymap(tags: &[Tag]) -> Result<Keymap> {
     keymap.bind(key('h', MOD)?, Action::ShrinkMaster)?;
     keymap.bind(key('l', MOD)?, Action::GrowMaster)?;
     keymap.bind(key('f', MOD)?, Action::ToggleFloat)?;
+    keymap.bind(key('f', shifted)?, Action::ToggleFullscreen)?;
     keymap.bind(key(',', MOD)?, Action::FocusPrevOutput)?;
     keymap.bind(key('.', MOD)?, Action::FocusNextOutput)?;
     keymap.bind(key(',', shifted)?, Action::SendToPrevOutput)?;

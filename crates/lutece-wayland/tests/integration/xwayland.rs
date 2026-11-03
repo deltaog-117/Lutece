@@ -5,17 +5,18 @@
 //! set `LUTECE_REQUIRE_X11=1` (as CI should) to make a missing program a failure.
 
 use crate::support::{TestClient, backend, engine};
-use lutece::{Engine, Event, WinId};
+use lutece::{Engine, Event, Insets, OutputId, WinId};
 use lutece_wayland::WaylandBackend;
+use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
-use std::io::Read;
-use std::sync::mpsc;
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeGCAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, Rectangle,
-    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, Window, WindowClass,
+    AtomEnum, ChangeGCAux, ClientMessageEvent, ConnectionExt, CreateGCAux, CreateWindowAux,
+    EventMask, Rectangle, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent,
+    Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -141,6 +142,44 @@ impl Fixture {
         menu: bool,
     ) -> Window {
         let window = self.x.generate_id().expect("window id");
+        self.create_and_map(window, at, size, title, class, menu);
+        window
+    }
+
+    fn intern(&self, name: &str) -> u32 {
+        self.x
+            .intern_atom(false, name.as_bytes())
+            .expect("intern request")
+            .reply()
+            .expect("intern reply")
+            .atom
+    }
+
+    /// Asks the window manager, as an X11 program does, to add (1), remove (0) or toggle (2)
+    /// the fullscreen state of `window`.
+    fn request_fullscreen(&self, window: Window, action: u32) {
+        let message = ClientMessageEvent::new(
+            32,
+            window,
+            self.intern("_NET_WM_STATE"),
+            [action, self.intern("_NET_WM_STATE_FULLSCREEN"), 0, 1, 0],
+        );
+        let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+        self.x
+            .send_event(false, self.root, mask, message)
+            .expect("send _NET_WM_STATE");
+        self.x.flush().expect("flush");
+    }
+
+    fn create_and_map(
+        &self,
+        window: Window,
+        at: (i16, i16),
+        size: (u16, u16),
+        title: &str,
+        class: &str,
+        menu: bool,
+    ) {
         let aux = CreateWindowAux::new()
             .background_pixel(0x00ff_0000)
             .override_redirect(u32::from(menu));
@@ -199,7 +238,6 @@ impl Fixture {
             )
             .expect("poly_fill_rectangle");
         self.x.flush().expect("flush");
-        window
     }
 
     /// Where `window` is on the screen, whatever it is parented to.
@@ -261,6 +299,56 @@ fn the_core_places_an_x11_window_like_any_other() {
             .filter(|at| *at == (0, 0, 1000, 600))
     });
     assert_eq!(at, (0, 0, 1000, 600));
+}
+
+/// A 30-pixel band along the top that windows are not tiled into, as a bar would leave.
+fn reserve_a_top_band(fixture: &mut Fixture) {
+    fixture.waiting.push(Event::ReservedChanged {
+        output: OutputId::new(0),
+        insets: Insets::new(0, 30, 0, 0),
+    });
+}
+
+#[test]
+fn an_x11_program_can_ask_to_be_fullscreen_and_to_stop() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    reserve_a_top_band(&mut fixture);
+    let window = fixture.open((10, 10), (50, 50), "video", "Player", false);
+    fixture.wait_for_events("the window", |events| !opened(events).is_empty());
+    fixture.drive();
+    fixture.wait_for("the window below the band", |fixture| {
+        fixture
+            .position(window)
+            .filter(|at| *at == (0, 30, 1000, 570))
+    });
+
+    fixture.request_fullscreen(window, 1);
+    fixture.wait_for_events("the request", |events| {
+        events
+            .iter()
+            .any(|event| matches!(event, Event::FullscreenRequested { on: true, .. }))
+    });
+    fixture.drive();
+    fixture.wait_for("the window to cover the band", |fixture| {
+        fixture
+            .position(window)
+            .filter(|at| *at == (0, 0, 1000, 600))
+    });
+
+    fixture.request_fullscreen(window, 0);
+    fixture.wait_for_events("the request to stop", |events| {
+        events
+            .iter()
+            .any(|event| matches!(event, Event::FullscreenRequested { on: false, .. }))
+    });
+    fixture.drive();
+    fixture.wait_for("the window back below the band", |fixture| {
+        fixture
+            .position(window)
+            .filter(|at| *at == (0, 30, 1000, 570))
+    });
 }
 
 #[test]
@@ -460,12 +548,7 @@ impl Fixture {
 
     /// Asks for the clipboard as text and waits for the answer: the property it was put
     /// in, or `NONE` if the request was refused.
-    fn request_clipboard(
-        &mut self,
-        window: Window,
-        atoms: &Atoms,
-        client: &mut TestClient,
-    ) -> u32 {
+    fn request_clipboard(&mut self, window: Window, atoms: &Atoms, client: &mut TestClient) -> u32 {
         // Asking before the bridge has taken the selection would be refused by the X server
         // itself, which says nothing about the access rule under test.
         self.wait_for("the clipboard to have an owner", |fixture| {

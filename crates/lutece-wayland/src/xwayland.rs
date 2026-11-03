@@ -95,6 +95,16 @@ impl State {
         }
     }
 
+    /// An X11 program asked to be fullscreen (`on`) or to stop being, with a
+    /// `_NET_WM_STATE` message. A window that is not announced yet is ignored: Smithay does
+    /// not read the state a program sets before it maps, so one that starts fullscreen
+    /// that way is not seen as asking.
+    fn x11_fullscreen(&mut self, window: &X11Surface, on: bool) {
+        if let Some(id) = self.windows.id_of_x11(window.window_id()) {
+            self.events.push(Event::FullscreenRequested { id, on });
+        }
+    }
+
     fn closed(&mut self, id: WinId) {
         self.events.push(Event::WindowClosed(id));
     }
@@ -150,6 +160,14 @@ impl XwmHandler for State {
         drop(window.configure(rect));
     }
 
+    fn fullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        self.x11_fullscreen(&window, true);
+    }
+
+    fn unfullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        self.x11_fullscreen(&window, false);
+    }
+
     fn configure_notify(
         &mut self,
         _xwm: XwmId,
@@ -179,9 +197,9 @@ impl XwmHandler for State {
         self.seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.current_focus())
-            .is_some_and(|focus| {
-                matches!(focus, Focus::X11(window) if window.xwm_id() == Some(xwm))
-            })
+            .is_some_and(
+                |focus| matches!(focus, Focus::X11(window) if window.xwm_id() == Some(xwm)),
+            )
     }
 
     fn send_selection(

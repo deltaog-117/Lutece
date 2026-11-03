@@ -12,10 +12,8 @@
 
 use crate::compositor::State;
 use smithay::input::Seat;
-use std::os::fd::OwnedFd;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
     clear_data_device_selection, current_data_device_selection_userdata,
@@ -26,7 +24,9 @@ use smithay::wayland::selection::primary_selection::{
     current_primary_selection_userdata, request_primary_client_selection, set_primary_focus,
     set_primary_selection,
 };
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::{delegate_data_device, delegate_primary_selection};
+use std::os::fd::OwnedFd;
 
 impl State {
     /// Points both selections at the client that owns `focused`, or at nobody.

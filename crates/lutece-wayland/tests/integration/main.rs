@@ -3,6 +3,8 @@
 mod clipboard;
 mod decoration;
 mod dmabuf;
+mod fullscreen;
+mod layers;
 mod outputs;
 mod pointer;
 mod popup;

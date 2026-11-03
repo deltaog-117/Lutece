@@ -10,7 +10,7 @@ use crate::pointer::PointerState;
 use crate::scale::Scale;
 use crate::translate;
 use crate::windows::Windows;
-use lutece::{Event, KeyPress, Output as CoreOutput, Rect, WindowInfo};
+use lutece::{Event, Insets, KeyPress, Output as CoreOutput, OutputId, Rect, WindowInfo};
 use smithay::backend::input::{KeyState, Keycode};
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::desktop::{PopupKind, PopupManager};
@@ -21,6 +21,7 @@ use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput as WlOutputResource;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
 use smithay::reexports::wayland_server::{
     Client, DisplayHandle,
@@ -40,6 +41,7 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     XdgToplevelSurfaceData,
 };
+use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
@@ -48,7 +50,7 @@ use smithay::{
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
     delegate_viewporter, delegate_xdg_shell,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const SEAT_NAME: &str = "lutece";
 /// Key repeat as most desktops default to it: wait 600 ms, then 25 keys per second.
@@ -72,6 +74,17 @@ pub(crate) struct State {
     pub(crate) screens: Vec<Rect>,
     /// The same outputs as clients see them, to tell surfaces which they are on.
     pub(crate) wl_outputs: Vec<(Rect, WlOutput)>,
+    /// The same outputs with the ids the core knows them by, to tell it what bars reserve.
+    pub(crate) output_ids: Vec<(OutputId, WlOutput)>,
+    /// What layer surfaces reserve on each output, as the core was last told. An output
+    /// with nothing reserved has no entry.
+    pub(crate) reserved: HashMap<OutputId, Insets>,
+    pub(crate) layer_shell: WlrLayerShellState,
+    /// The window the core last focused, which has the keyboard unless a layer surface
+    /// takes it.
+    pub(crate) window_focus: Option<Focus>,
+    /// A layer surface that was clicked and takes the keyboard when it is asked to.
+    pub(crate) layer_focus: Option<WlSurface>,
     pub(crate) dmabufs: Dmabufs,
     /// How finely clients are told to draw.
     pub(crate) scale: Scale,
@@ -136,6 +149,11 @@ impl State {
             windows: Windows::default(),
             screens: Vec::new(),
             wl_outputs: Vec::new(),
+            output_ids: Vec::new(),
+            reserved: HashMap::new(),
+            layer_shell: WlrLayerShellState::new::<Self>(display),
+            window_focus: None,
+            layer_focus: None,
             dmabufs: Dmabufs::new(),
             scale: Scale::ONE,
             popups: PopupManager::default(),
@@ -215,6 +233,22 @@ impl State {
                 transient_for,
             },
         });
+        // A window that asked for fullscreen before it opened asks again now that the
+        // core knows it.
+        if self.windows.take_early_fullscreen(surface) {
+            self.events
+                .push(Event::FullscreenRequested { id, on: true });
+        }
+    }
+
+    /// A toplevel asked to be fullscreen (`on`) or to stop being. It is the core that
+    /// decides; the answer comes back as a state in the next configure.
+    fn request_fullscreen(&mut self, surface: &WlSurface, on: bool) {
+        match self.windows.id_of(surface) {
+            Some(id) => self.events.push(Event::FullscreenRequested { id, on }),
+            // Not announced yet: remembered, and asked for once the window opens.
+            None => self.windows.remember_fullscreen(surface, on),
+        }
     }
 
     /// A popup waits for its first configure before it draws, and that must come after
@@ -276,6 +310,8 @@ impl CompositorHandler for State {
         self.announce(surface);
         // An X11 window is announced once its surface has its first commit.
         self.announce_x11_windows();
+        // A layer surface is arranged, and configured the first time, on its commit.
+        self.commit_layer(surface);
     }
 
     fn new_subsurface(&mut self, _surface: &WlSurface, parent: &WlSurface) {
@@ -332,6 +368,14 @@ impl XdgShellHandler for State {
         self.pointer
             .grabbed_popups
             .retain(|grabbed| grabbed != &surface);
+    }
+
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutputResource>) {
+        self.request_fullscreen(surface.wl_surface(), true);
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.request_fullscreen(surface.wl_surface(), false);
     }
 
     fn title_changed(&mut self, _surface: ToplevelSurface) {}

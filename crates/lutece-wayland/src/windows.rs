@@ -51,6 +51,8 @@ pub(crate) struct Entry {
     pub(crate) shell: Shell,
     /// `None` while the window is hidden.
     pub(crate) rect: Option<Rect>,
+    /// Whether the client has been told it is fullscreen.
+    pub(crate) fullscreen: bool,
 }
 
 /// One surface tree that is on screen: a window, or a popup that belongs to one.
@@ -81,6 +83,9 @@ pub(crate) struct Windows {
     managed: HashMap<WinId, Entry>,
     /// Stacking order, bottom to top.
     order: Vec<WinId>,
+    /// Toplevels that asked for fullscreen before they were announced, as a player that
+    /// starts fullscreen does. The request is passed on when the window opens.
+    early_fullscreen: Vec<WlSurface>,
 }
 
 impl Windows {
@@ -104,8 +109,31 @@ impl Windows {
         let id = WinId::new(self.next_id);
         self.next_id += 1;
         self.order.push(id);
-        self.managed.insert(id, Entry { shell, rect: None });
+        self.managed.insert(
+            id,
+            Entry {
+                shell,
+                rect: None,
+                fullscreen: false,
+            },
+        );
         id
+    }
+
+    /// Remembers that a toplevel that is not announced yet asked for fullscreen (`on`),
+    /// or changed its mind.
+    pub(crate) fn remember_fullscreen(&mut self, surface: &WlSurface, on: bool) {
+        self.early_fullscreen.retain(|asked| asked != surface);
+        if on {
+            self.early_fullscreen.push(surface.clone());
+        }
+    }
+
+    /// Whether `surface` asked for fullscreen before it was announced; forgets the ask.
+    pub(crate) fn take_early_fullscreen(&mut self, surface: &WlSurface) -> bool {
+        let before = self.early_fullscreen.len();
+        self.early_fullscreen.retain(|asked| asked != surface);
+        self.early_fullscreen.len() != before
     }
 
     /// Remembers an X11 window whose map request was granted, until its surface is
@@ -237,27 +265,35 @@ impl Windows {
         self.order = next;
     }
 
-    /// Everything on screen from front to back: X11 menus first, then for each placed
-    /// window, from the top of the stack down, its popups (the newest first) and then the
-    /// window itself. A hidden window has no rectangle and has no layers.
-    pub(crate) fn layers(&self) -> Vec<Layer> {
-        let menus = self.override_redirect.iter().rev().filter_map(|window| {
-            Some(Layer {
-                id: None,
-                surface: window.wl_surface()?,
-                origin: window.geometry().loc,
-                popup: true,
-                clip: None,
+    /// The mapped X11 menus and tooltips, newest first. They are drawn above everything.
+    pub(crate) fn menu_layers(&self) -> Vec<Layer> {
+        self.override_redirect
+            .iter()
+            .rev()
+            .filter_map(|window| {
+                Some(Layer {
+                    id: None,
+                    surface: window.wl_surface()?,
+                    origin: window.geometry().loc,
+                    popup: true,
+                    clip: None,
+                })
             })
-        });
-        let windows = self
-            .order
+            .collect()
+    }
+
+    /// The placed windows that are fullscreen (`fullscreen`) or are not, from the top of
+    /// the stack down: for each, its popups (the newest first) and then the window itself.
+    /// A hidden window has no rectangle and has no layers.
+    pub(crate) fn window_layers(&self, fullscreen: bool) -> Vec<Layer> {
+        self.order
             .iter()
             .rev()
             .filter_map(|id| Some((*id, self.managed.get(id)?)))
+            .filter(|(_, entry)| entry.fullscreen == fullscreen)
             .filter_map(|(id, entry)| Some((id, entry, entry.rect?)))
-            .flat_map(|(id, entry, rect)| window_layers(id, entry, rect));
-        menus.chain(windows).collect()
+            .flat_map(|(id, entry, rect)| window_layers(id, entry, rect))
+            .collect()
     }
 }
 

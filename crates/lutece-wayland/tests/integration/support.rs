@@ -48,6 +48,12 @@ use wayland_protocols::xdg::shell::client::xdg_positioner::{self, XdgPositioner}
 use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
+    Layer, ZwlrLayerShellV1,
+};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+    self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1,
+};
 
 /// How many back-and-forth passes settle one exchange. A request, its reply and the
 /// reaction to the reply need three; the rest is margin.
@@ -55,12 +61,16 @@ const PASSES: usize = 6;
 const PASS_TIMEOUT: Duration = Duration::from_millis(5);
 /// The value of `xdg_toplevel.state.activated` in the protocol.
 const ACTIVATED: u32 = 4;
+/// The value of `xdg_toplevel.state.fullscreen` in the protocol.
+const FULLSCREEN: u32 = 2;
 
 /// What the client saw happen to one of its windows.
 #[derive(Debug, Default)]
 pub struct Window {
     pub configures: Vec<(i32, i32)>,
     pub activated: bool,
+    /// Whether the last configure said the window is fullscreen.
+    pub fullscreen: bool,
     pub closed: bool,
     /// The decoration mode the compositor last announced, if it announced one.
     pub decoration_mode: Option<Mode>,
@@ -75,6 +85,17 @@ pub struct Window {
     decoration: Option<ZxdgToplevelDecorationV1>,
     fractional_scale: Option<WpFractionalScaleV1>,
     viewport: Option<WpViewport>,
+}
+
+/// What the client saw happen to one of its layer surfaces (a bar, a launcher, a
+/// wallpaper).
+#[derive(Debug)]
+pub struct Bar {
+    /// Each configure as `(width, height)`.
+    pub configures: Vec<(u32, u32)>,
+    pub closed: bool,
+    surface: WlSurface,
+    layer: Option<ZwlrLayerSurfaceV1>,
 }
 
 /// What the client saw happen to one of its popups.
@@ -102,6 +123,11 @@ struct Observed {
     decoration_manager: Option<ZxdgDecorationManagerV1>,
     fractional_manager: Option<WpFractionalScaleManagerV1>,
     viewporter: Option<WpViewporter>,
+    layer_shell: Option<ZwlrLayerShellV1>,
+    bars: Vec<Bar>,
+    /// The surface that has the keyboard, and the one the pointer is over.
+    keyboard_surface: Option<WlSurface>,
+    pointer_surface: Option<WlSurface>,
     /// The first `wl_output`, bound to see what it says about the screen.
     output: Option<WlOutput>,
     /// The scale and the mode size in pixels the bound output last announced.
@@ -176,6 +202,16 @@ impl TestClient {
 
     /// Creates a toplevel with a title and an app id, and commits it without a buffer.
     pub fn open_window(&mut self, title: &str, app_id: &str) -> usize {
+        self.open_window_as(title, app_id, false)
+    }
+
+    /// Like [`open_window`](Self::open_window), but the window asks to be fullscreen
+    /// before its first commit, as a player started in fullscreen does.
+    pub fn open_window_fullscreen(&mut self, title: &str, app_id: &str) -> usize {
+        self.open_window_as(title, app_id, true)
+    }
+
+    fn open_window_as(&mut self, title: &str, app_id: &str, fullscreen: bool) -> usize {
         let qh = self.queue.handle();
         let index = self.observed.windows.len();
         let compositor = self.observed.compositor.as_ref().expect("compositor bound");
@@ -185,6 +221,9 @@ impl TestClient {
         let toplevel = xdg.get_toplevel(&qh, index);
         toplevel.set_title(title.to_owned());
         toplevel.set_app_id(app_id.to_owned());
+        if fullscreen {
+            toplevel.set_fullscreen(None);
+        }
         surface.commit();
         self.observed.windows.push(Window {
             xdg: Some(xdg),
@@ -193,6 +232,155 @@ impl TestClient {
             ..Window::default()
         });
         index
+    }
+
+    /// Asks to be fullscreen (`on`), or to stop being, as a window with a button for it does.
+    pub fn request_fullscreen(&mut self, index: usize, on: bool) {
+        let toplevel = self.observed.windows[index]
+            .toplevel
+            .as_ref()
+            .expect("the window is alive");
+        if on {
+            toplevel.set_fullscreen(None);
+        } else {
+            toplevel.unset_fullscreen();
+        }
+    }
+
+    /// Whether the compositor offers `wlr-layer-shell`.
+    pub fn has_layer_shell(&self) -> bool {
+        self.observed.layer_shell.is_some()
+    }
+
+    /// Creates a layer surface and commits it without a buffer, as the protocol has a
+    /// client do before it is configured. `zone` is the space to keep clear for it.
+    pub fn open_layer(
+        &mut self,
+        layer: Layer,
+        anchor: Anchor,
+        (width, height): (u32, u32),
+        zone: i32,
+        keyboard: KeyboardInteractivity,
+    ) -> usize {
+        let qh = self.queue.handle();
+        let index = self.observed.bars.len();
+        let surface = self
+            .observed
+            .compositor
+            .as_ref()
+            .expect("compositor bound")
+            .create_surface(&qh, ());
+        let layer_surface = self
+            .observed
+            .layer_shell
+            .as_ref()
+            .expect("the compositor offers wlr-layer-shell")
+            .get_layer_surface(&surface, None, layer, "test".to_owned(), &qh, index);
+        layer_surface.set_size(width, height);
+        layer_surface.set_anchor(anchor);
+        layer_surface.set_exclusive_zone(zone);
+        layer_surface.set_keyboard_interactivity(keyboard);
+        surface.commit();
+        self.observed.bars.push(Bar {
+            configures: Vec::new(),
+            closed: false,
+            surface,
+            layer: Some(layer_surface),
+        });
+        index
+    }
+
+    /// Gives a layer surface a buffer of `width` x `height`, once it is configured.
+    pub fn map_layer(&mut self, index: usize, width: i32, height: i32) {
+        let buffer = self.buffer(width, height);
+        let surface = &self.observed.bars[index].surface;
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        self.observed.buffers.push(buffer);
+    }
+
+    /// Destroys a layer surface the way a bar that quits would.
+    pub fn destroy_layer(&mut self, index: usize) {
+        let bar = &mut self.observed.bars[index];
+        if let Some(layer) = bar.layer.take() {
+            layer.destroy();
+        }
+        bar.surface.destroy();
+    }
+
+    pub fn bar(&self, index: usize) -> &Bar {
+        &self.observed.bars[index]
+    }
+
+    /// Whether the keyboard is on this layer surface.
+    pub fn keyboard_on_bar(&self, index: usize) -> bool {
+        self.observed.keyboard_surface.as_ref() == Some(&self.observed.bars[index].surface)
+    }
+
+    /// Whether the keyboard is on this window.
+    pub fn keyboard_on_window(&self, index: usize) -> bool {
+        self.observed.keyboard_surface.as_ref() == self.observed.windows[index].surface.as_ref()
+    }
+
+    /// Whether the pointer is over this layer surface.
+    pub fn pointer_on_bar(&self, index: usize) -> bool {
+        self.observed.pointer_surface.as_ref() == Some(&self.observed.bars[index].surface)
+    }
+
+    /// Whether the pointer is over this window.
+    pub fn pointer_on_window(&self, index: usize) -> bool {
+        self.observed.pointer_surface.as_ref() == self.observed.windows[index].surface.as_ref()
+    }
+
+    /// Opens a popup of a layer surface (a menu of a bar) of `width` x `height` at `(x, y)`
+    /// in the bar's surface.
+    pub fn open_bar_popup(
+        &mut self,
+        bar: usize,
+        (x, y): (i32, i32),
+        (width, height): (i32, i32),
+    ) -> usize {
+        let qh = self.queue.handle();
+        let slot = self.observed.popups.len();
+        let positioner = self
+            .observed
+            .wm_base
+            .as_ref()
+            .expect("xdg_wm_base bound")
+            .create_positioner(&qh, ());
+        positioner.set_size(width, height);
+        positioner.set_anchor_rect(x, y, 1, 1);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        let surface = self
+            .observed
+            .compositor
+            .as_ref()
+            .expect("compositor bound")
+            .create_surface(&qh, ());
+        let xdg = self
+            .observed
+            .wm_base
+            .as_ref()
+            .expect("xdg_wm_base bound")
+            .get_xdg_surface(&surface, &qh, PopupSlot);
+        let popup = xdg.get_popup(None, &positioner, &qh, slot);
+        self.observed.bars[bar]
+            .layer
+            .as_ref()
+            .expect("the layer surface is alive")
+            .get_popup(&popup);
+        surface.commit();
+        self.observed.popups.push(Popup {
+            configures: Vec::new(),
+            done: false,
+            entered: Vec::new(),
+            surface,
+            _xdg: xdg,
+            _popup: popup,
+        });
+        positioner.destroy();
+        slot
     }
 
     /// Asks for the window to be decorated by the compositor, as a client that draws no
@@ -606,6 +794,9 @@ impl Dispatch<WlRegistry, ()> for Observed {
                 state.fractional_manager = Some(registry.bind(name, 1, qh, ()));
             }
             "wp_viewporter" => state.viewporter = Some(registry.bind(name, 1, qh, ())),
+            "zwlr_layer_shell_v1" => {
+                state.layer_shell = Some(registry.bind(name, version.min(4), qh, ()));
+            }
             "zwp_linux_dmabuf_v1" => {
                 state.dmabuf = Some(registry.bind(name, version.min(4), qh, ()));
             }
@@ -684,9 +875,13 @@ impl Dispatch<XdgToplevel, usize> for Observed {
                 states,
             } => {
                 window.configures.push((width, height));
-                window.activated = states
-                    .chunks_exact(4)
-                    .any(|raw| u32::from_ne_bytes([raw[0], raw[1], raw[2], raw[3]]) == ACTIVATED);
+                let has = |wanted: u32| {
+                    states
+                        .chunks_exact(4)
+                        .any(|raw| u32::from_ne_bytes([raw[0], raw[1], raw[2], raw[3]]) == wanted)
+                };
+                window.activated = has(ACTIVATED);
+                window.fullscreen = has(FULLSCREEN);
             }
             xdg_toplevel::Event::Close => window.closed = true,
             _ => {}
@@ -769,9 +964,17 @@ impl Dispatch<WlKeyboard, ()> for Observed {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_keyboard::Event::Enter { serial, .. } => {
+            wl_keyboard::Event::Enter {
+                serial, surface, ..
+            } => {
                 state.keyboard_enters += 1;
                 state.keyboard_serial = serial;
+                state.keyboard_surface = Some(surface);
+            }
+            wl_keyboard::Event::Leave { surface, .. } => {
+                if state.keyboard_surface.as_ref() == Some(&surface) {
+                    state.keyboard_surface = None;
+                }
             }
             wl_keyboard::Event::Key { .. } => state.keys += 1,
             _ => {}
@@ -797,6 +1000,7 @@ impl Dispatch<WlPointer, ()> for Observed {
             } => {
                 state.pointer_enters += 1;
                 state.pointer_position = Some((surface_x, surface_y));
+                state.pointer_surface = Some(surface.clone());
                 if state.popups.iter().any(|popup| popup.surface == surface) {
                     state.pointer_entered_popup = true;
                 }
@@ -806,6 +1010,11 @@ impl Dispatch<WlPointer, ()> for Observed {
                 surface_y,
                 ..
             } => state.pointer_position = Some((surface_x, surface_y)),
+            wl_pointer::Event::Leave { surface, .. } => {
+                if state.pointer_surface.as_ref() == Some(&surface) {
+                    state.pointer_surface = None;
+                }
+            }
             wl_pointer::Event::Button { .. } => state.pointer_buttons += 1,
             wl_pointer::Event::Axis { .. } => state.pointer_axes += 1,
             _ => {}
@@ -886,6 +1095,32 @@ delegate_noop!(Observed: ignore ZxdgDecorationManagerV1);
 delegate_noop!(Observed: ignore WpFractionalScaleManagerV1);
 delegate_noop!(Observed: ignore WpViewporter);
 delegate_noop!(Observed: ignore WpViewport);
+delegate_noop!(Observed: ignore ZwlrLayerShellV1);
+
+impl Dispatch<ZwlrLayerSurfaceV1, usize> for Observed {
+    fn event(
+        state: &mut Self,
+        layer: &ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        index: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let bar = &mut state.bars[*index];
+        match event {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                layer.ack_configure(serial);
+                bar.configures.push((width, height));
+            }
+            zwlr_layer_surface_v1::Event::Closed => bar.closed = true,
+            _ => {}
+        }
+    }
+}
 
 impl Dispatch<WlOutput, ()> for Observed {
     fn event(
