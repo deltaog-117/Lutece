@@ -213,6 +213,25 @@ impl StackSet {
         workspace.set_float(id, float);
     }
 
+    /// Makes the focused window fullscreen, or ends its fullscreen if it has it. Does
+    /// nothing on an empty workspace.
+    pub fn toggle_fullscreen(&mut self) {
+        let workspace = &mut self.current.workspace;
+        let Some(id) = workspace.focus() else {
+            return;
+        };
+        workspace.set_fullscreen(id, workspace.fullscreen() != Some(id));
+    }
+
+    /// Makes `id` fullscreen, or ends its fullscreen with `on` false, on whichever
+    /// workspace holds it. It becomes the focus of that workspace, but no screen changes
+    /// what it shows. A window that is not managed is ignored.
+    pub(crate) fn set_fullscreen(&mut self, id: WinId, on: bool) {
+        if let Some(workspace) = self.workspaces_mut().find(|w| w.contains(id)) {
+            workspace.set_fullscreen(id, on);
+        }
+    }
+
     /// Changes the focused window's float state. Does nothing if it is tiled.
     pub(crate) fn update_focused_float(&mut self, change: impl FnOnce(Float) -> Float) {
         let workspace = &mut self.current.workspace;

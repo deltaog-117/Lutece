@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e5c89bf0bfed404f124430630c9711b0e0947e651bf76d1ca81ceba7833292ce # shrinks to events = [ReservedChanged { output: OutputId(0), insets: Insets { left: 49, top: 0, right: 54, bottom: 0 } }, OutputsChanged([Output { id: OutputId(0), rect: Rect { origin: Point { x: 0, y: 0 }, size: Size { width: 100, height: 100 } } }]), WindowOpened { id: WinId(2), info: WindowInfo { title: "", class: "", transient_for: None } }, WindowOpened { id: WinId(3), info: WindowInfo { title: "", class: "", transient_for: None } }]

@@ -1,7 +1,7 @@
 //! Things that happened, as reported by a backend.
 
 use crate::shared::error::{Error, Result};
-use crate::shared::geometry::Rect;
+use crate::shared::geometry::{Insets, Rect};
 use crate::shared::ids::{OutputId, WinId};
 use std::ops::BitOr;
 
@@ -42,6 +42,27 @@ pub enum Event {
     },
     /// The set of screens changed; this is the complete new set.
     OutputsChanged(Vec<Output>),
+    /// A window asked to fill its whole screen (`on`), or to go back to its place. Only
+    /// a window on the screen's workspace stays fullscreen while it has the focus, and
+    /// the window that asks takes it. An unknown window is ignored.
+    FullscreenRequested {
+        /// The window.
+        id: WinId,
+        /// Whether it wants to be fullscreen.
+        on: bool,
+    },
+    /// Bars and panels on this output now reserve `insets` in all. This is the complete
+    /// reserve of the output, not a change to the previous one: the backend combines its
+    /// bars, and [`Insets::NONE`] means there are none. Tiled and floating windows are
+    /// placed in what is left; a fullscreen window still covers the whole output. A
+    /// reserve that would take more than half of an output's width or height is ignored
+    /// on that axis, so no client can leave the windows without room.
+    ReservedChanged {
+        /// The output the bars sit on.
+        output: OutputId,
+        /// What they reserve.
+        insets: Insets,
+    },
 }
 
 /// Window details a layout or rule may need.

@@ -21,6 +21,8 @@ impl Engine {
     /// A window that opens is placed by the engine's rules: on the current workspace by
     /// default, on another one if a rule sends it there, floating if a rule floats it, or
     /// released to its client with [`Effect::Release`] if a rule ignores it.
+    /// A fullscreen request makes the window fill its whole screen, and the bars' reserve
+    /// reported with `ReservedChanged` shrinks the area the other windows share.
     /// A drag of a floating window moves and resizes it, as the move and resize keys do.
     /// A key press runs the action bound to it in the engine's keymap, and a press with
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
@@ -44,7 +46,7 @@ impl Engine {
             Event::FloatAdjusted { id, dx, dy, dw, dh } => {
                 // A floating size is relative to the screen, so with no screen yet only
                 // the movement applies.
-                let area = self.area_of(self.stacks.current_output());
+                let area = self.work_area_of(self.stacks.current_output());
                 self.stacks.update_float(id, |float| {
                     let moved = float.moved(dx, dy);
                     area.map_or(moved, |area| moved.resized(area, dw, dh))
@@ -53,6 +55,14 @@ impl Engine {
             Event::KeyPressed(press) => {
                 if let Some(action) = self.keymap.action(press).cloned() {
                     self.run(action, &mut effects);
+                }
+            }
+            Event::FullscreenRequested { id, on } => self.stacks.set_fullscreen(id, on),
+            Event::ReservedChanged { output, insets } => {
+                if insets.is_none() {
+                    self.reserved.remove(&output);
+                } else {
+                    self.reserved.insert(output, insets);
                 }
             }
             Event::OutputsChanged(outputs) => {
@@ -110,6 +120,7 @@ impl Engine {
             Action::SendToNextOutput => self.stacks.send_focused_to_next_output(),
             Action::SendToPrevOutput => self.stacks.send_focused_to_prev_output(),
             Action::ToggleFloat => self.stacks.toggle_float(),
+            Action::ToggleFullscreen => self.stacks.toggle_fullscreen(),
             Action::MoveFloat(direction) => {
                 let (dx, dy) = direction.delta(FLOAT_STEP);
                 self.stacks
@@ -118,7 +129,7 @@ impl Engine {
             Action::ResizeFloat(direction) => {
                 // A floating size is relative to the screen, so with no screen yet there
                 // is nothing to resize against.
-                if let Some(area) = self.area_of(self.stacks.current_output()) {
+                if let Some(area) = self.work_area_of(self.stacks.current_output()) {
                     let (dw, dh) = direction.delta(FLOAT_STEP);
                     self.stacks
                         .update_focused_float(|float| float.resized(area, dw, dh));

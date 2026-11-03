@@ -13,9 +13,10 @@ use crate::rules::Rules;
 use crate::shared::contracts::event::KeyPress;
 use crate::shared::contracts::event::Output;
 use crate::shared::error::{Error, Result};
-use crate::shared::geometry::Rect;
+use crate::shared::geometry::{Insets, Rect};
 use crate::shared::ids::OutputId;
 use crate::stack::stackset::StackSet;
+use std::collections::HashMap;
 
 /// The window manager's state and the rules that change it.
 ///
@@ -46,6 +47,10 @@ pub struct Engine {
     /// The outputs the backend reported, and the area each one covers; empty until the
     /// backend reports any.
     outputs: Vec<Output>,
+    /// What bars reserve on each output, as the backend last reported it. An output with
+    /// nothing reserved has no entry. Kept when an output disappears, so a bar that
+    /// outlives a monitor change is still honoured when its output returns.
+    reserved: HashMap<OutputId, Insets>,
 }
 
 impl Engine {
@@ -58,6 +63,7 @@ impl Engine {
             keymap: Keymap::new(),
             rules: Rules::new(),
             outputs: Vec::new(),
+            reserved: HashMap::new(),
         }
     }
 
@@ -98,11 +104,18 @@ impl Engine {
         &self.stacks
     }
 
-    /// The area `output` covers, if the backend reported it.
+    /// The area `output` covers, if the backend reported it. A fullscreen window fills it.
     fn area_of(&self, output: OutputId) -> Option<Rect> {
         self.outputs
             .iter()
             .find(|reported| reported.id == output)
             .map(|reported| reported.rect)
+    }
+
+    /// The area of `output` left for tiled and floating windows once bars took theirs.
+    fn work_area_of(&self, output: OutputId) -> Option<Rect> {
+        let area = self.area_of(output)?;
+        let reserved = self.reserved.get(&output).copied().unwrap_or_default();
+        Some(area.inset(reserved.limited_to(area)))
     }
 }

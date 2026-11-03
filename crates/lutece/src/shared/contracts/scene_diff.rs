@@ -16,15 +16,25 @@ pub enum Change {
     Move(Placement),
     /// The stacking order changed; this is the complete new order, bottom to top.
     Restack(Vec<WinId>),
+    /// The window's fullscreen state in the scene differs from what it was. A window that
+    /// appears already fullscreen gets this change too, ahead of its `Show`. A window that
+    /// leaves the scene gets only a `Hide`; its state is forgotten.
+    Fullscreen {
+        /// The window.
+        id: WinId,
+        /// Whether it is now fullscreen.
+        on: bool,
+    },
     /// Focus changed.
     Focus(Option<WinId>),
 }
 
 /// Compares two scenes.
 ///
-/// Changes come in a fixed order: hides, then shows and moves in stacking order, then
-/// at most one restack, then at most one focus change. Hiding first frees the space
-/// before newcomers fill it. A restack is sent whenever a window is shown, because
+/// Changes come in a fixed order: hides, then fullscreen changes, then shows and moves in
+/// stacking order, then at most one restack, then at most one focus change. Hiding first
+/// frees the space before newcomers fill it, and fullscreen comes before the placement
+/// so a backend that sizes a window by its state does it once. A restack is sent whenever a window is shown, because
 /// where the newcomer sits in the stack is only known from the full order.
 ///
 /// # Examples
@@ -55,6 +65,13 @@ pub fn diff(old: &Scene, new: &Scene) -> Vec<Change> {
         Some(_) => None,
     });
 
+    let fullscreen = new.placements().iter().filter_map(|p| {
+        // A window that was not visible before starts from "not fullscreen".
+        let was = old.get(p.id).is_some() && old.is_fullscreen(p.id);
+        let on = new.is_fullscreen(p.id);
+        (was != on).then_some(Change::Fullscreen { id: p.id, on })
+    });
+
     let new_order: Vec<WinId> = new.placements().iter().map(|p| p.id).collect();
     let surviving_order = old
         .placements()
@@ -67,6 +84,7 @@ pub fn diff(old: &Scene, new: &Scene) -> Vec<Change> {
     let focus = (old.focus() != new.focus()).then(|| Change::Focus(new.focus()));
 
     hides
+        .chain(fullscreen)
         .chain(shows_and_moves)
         .chain(restack)
         .chain(focus)
@@ -90,8 +108,9 @@ mod tests {
         (
             proptest::collection::vec((0u64..12, rect_strategy()), 0..10),
             proptest::option::of(any::<usize>()),
+            0u64..4,
         )
-            .prop_map(|(raw, focus_pick)| {
+            .prop_map(|(raw, focus_pick, fullscreen_salt)| {
                 let mut seen = HashSet::new();
                 let placements: Vec<Placement> = raw
                     .into_iter()
@@ -104,7 +123,14 @@ mod tests {
                 let focus = focus_pick
                     .filter(|_| !placements.is_empty())
                     .map(|pick| placements[pick % placements.len()].id);
-                Scene::try_new(placements, focus).expect("ids are deduplicated, focus is listed")
+                let fullscreen: Vec<WinId> = placements
+                    .iter()
+                    .filter(|p| p.id.get() % 3 == fullscreen_salt % 3)
+                    .map(|p| p.id)
+                    .collect();
+                Scene::try_new(placements, focus)
+                    .and_then(|scene| scene.with_fullscreen(fullscreen))
+                    .expect("ids are deduplicated, focus and fullscreen are listed")
             })
     }
 
@@ -114,12 +140,26 @@ mod tests {
             old.placements().iter().map(|p| (p.id, p.rect)).collect();
         let mut order: Vec<WinId> = old.placements().iter().map(|p| p.id).collect();
         let mut focus = old.focus();
+        let mut fullscreen: HashSet<WinId> = old
+            .placements()
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| old.is_fullscreen(*id))
+            .collect();
 
         for change in changes {
             match change {
                 Change::Hide(id) => {
                     rects.remove(id);
                     order.retain(|other| other != id);
+                    fullscreen.remove(id);
+                }
+                Change::Fullscreen { id, on } => {
+                    if *on {
+                        fullscreen.insert(*id);
+                    } else {
+                        fullscreen.remove(id);
+                    }
                 }
                 Change::Show(p) => {
                     rects.insert(p.id, p.rect);
@@ -140,7 +180,9 @@ mod tests {
                 rect: rects[&id],
             })
             .collect();
-        Scene::try_new(placements, focus).expect("changes keep the scene valid")
+        Scene::try_new(placements, focus)
+            .and_then(|scene| scene.with_fullscreen(fullscreen))
+            .expect("changes keep the scene valid")
     }
 
     proptest! {
@@ -172,6 +214,59 @@ mod tests {
                 .collect();
             prop_assert_eq!(hidden, left);
         }
+    }
+
+    #[test]
+    fn a_window_entering_fullscreen_is_announced_before_its_move() {
+        let rect = |w| Rect::new(0, 0, w, 10).expect("non-zero size");
+        let a = WinId::new(1);
+        let plain = Scene::try_new(
+            vec![Placement {
+                id: a,
+                rect: rect(10),
+            }],
+            Some(a),
+        )
+        .expect("valid scene");
+        let full = Scene::try_new(
+            vec![Placement {
+                id: a,
+                rect: rect(99),
+            }],
+            Some(a),
+        )
+        .and_then(|scene| scene.with_fullscreen([a]))
+        .expect("valid scene");
+
+        assert_eq!(
+            diff(&plain, &full),
+            [
+                Change::Fullscreen { id: a, on: true },
+                Change::Move(Placement {
+                    id: a,
+                    rect: rect(99)
+                }),
+            ]
+        );
+        assert_eq!(
+            diff(&full, &plain)[0],
+            Change::Fullscreen { id: a, on: false }
+        );
+    }
+
+    #[test]
+    fn a_window_that_appears_fullscreen_is_announced_before_its_show() {
+        let a = WinId::new(1);
+        let rect = Rect::new(0, 0, 10, 10).expect("non-zero size");
+        let full = Scene::try_new(vec![Placement { id: a, rect }], None)
+            .and_then(|scene| scene.with_fullscreen([a]))
+            .expect("valid scene");
+
+        let changes = diff(&Scene::empty(), &full);
+        assert_eq!(changes[0], Change::Fullscreen { id: a, on: true });
+        assert!(matches!(changes[1], Change::Show(_)));
+        // A window that leaves while fullscreen is only hidden.
+        assert_eq!(diff(&full, &Scene::empty()), [Change::Hide(a)]);
     }
 
     #[test]

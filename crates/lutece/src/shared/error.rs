@@ -23,6 +23,9 @@ pub enum Error {
     /// Focus must point at a window the scene shows.
     #[error("focused window {0:?} is not in the scene")]
     FocusedWindowMissing(WinId),
+    /// Only a window the scene shows can be fullscreen.
+    #[error("fullscreen window {0:?} is not in the scene")]
+    FullscreenWindowMissing(WinId),
     /// A spawn effect needs a program to run.
     #[error("spawn command has an empty program name")]
     EmptyProgram,

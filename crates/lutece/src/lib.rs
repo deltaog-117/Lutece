@@ -21,7 +21,7 @@ pub use shared::contracts::event::{Event, KeyPress, Keysym, Modifiers, Output, W
 pub use shared::contracts::scene::{Placement, Scene};
 pub use shared::contracts::scene_diff::{Change, diff};
 pub use shared::error::{Error, Result};
-pub use shared::geometry::{Point, Rect, Size};
+pub use shared::geometry::{Insets, Point, Rect, Size};
 pub use shared::ids::{OutputId, Tag, WinId};
 pub use stack::stackset::StackSet;
 pub use stack::workspace::Workspace;

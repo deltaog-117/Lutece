@@ -48,6 +48,8 @@ pub enum Action {
     SendToPrevOutput,
     /// Float the focused window if it is tiled, or tile it again if it floats.
     ToggleFloat,
+    /// Make the focused window fill its whole screen, or put it back if it already does.
+    ToggleFullscreen,
     /// Move the focused window a step this way. Does nothing unless it floats.
     MoveFloat(Direction),
     /// Resize the focused window by a step: right and down widen and heighten it, left

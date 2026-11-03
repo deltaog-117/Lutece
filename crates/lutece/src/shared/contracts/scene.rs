@@ -21,11 +21,16 @@ pub struct Placement {
 /// Placements are ordered bottom to top. A window that is managed but not listed
 /// (for example, on another workspace) is hidden. Each window is listed once, and the
 /// focused window, if any, is one of the listed windows.
+///
+/// Some of the listed windows may be fullscreen: the placement of such a window already
+/// covers its whole output, and the scene also says so, so the backend can tell the
+/// client (`_NET_WM_STATE_FULLSCREEN` on X11, the fullscreen state on Wayland).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Scene {
     placements: Vec<Placement>,
     focus: Option<WinId>,
+    fullscreen: HashSet<WinId>,
 }
 
 impl Scene {
@@ -64,7 +69,45 @@ impl Scene {
         if let Some(id) = focus.filter(|id| !seen.contains(id)) {
             return Err(Error::FocusedWindowMissing(id));
         }
-        Ok(Self { placements, focus })
+        Ok(Self {
+            placements,
+            focus,
+            fullscreen: HashSet::new(),
+        })
+    }
+
+    /// Marks these listed windows as fullscreen.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::FullscreenWindowMissing`] if a window is not listed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lutece::{Placement, Rect, Scene, WinId};
+    ///
+    /// let win = WinId::new(1);
+    /// let rect = Rect::new(0, 0, 800, 600)?;
+    /// let scene = Scene::try_new(vec![Placement { id: win, rect }], Some(win))?
+    ///     .with_fullscreen([win])?;
+    /// assert!(scene.is_fullscreen(win));
+    /// # Ok::<(), lutece::Error>(())
+    /// ```
+    pub fn with_fullscreen(mut self, windows: impl IntoIterator<Item = WinId>) -> Result<Self> {
+        for id in windows {
+            if self.get(id).is_none() {
+                return Err(Error::FullscreenWindowMissing(id));
+            }
+            self.fullscreen.insert(id);
+        }
+        Ok(self)
+    }
+
+    /// Whether `id` is listed and fullscreen.
+    #[must_use]
+    pub fn is_fullscreen(&self, id: WinId) -> bool {
+        self.fullscreen.contains(&id)
     }
 
     /// The visible windows, bottom to top.
@@ -108,6 +151,20 @@ mod tests {
         let err =
             Scene::try_new(vec![placement(1)], Some(WinId::new(2))).expect_err("focus missing");
         assert_eq!(err, Error::FocusedWindowMissing(WinId::new(2)));
+    }
+
+    #[test]
+    fn a_fullscreen_window_must_be_listed() {
+        let scene = Scene::try_new(vec![placement(1)], None).expect("valid scene");
+        let err = scene
+            .clone()
+            .with_fullscreen([WinId::new(2)])
+            .expect_err("not listed");
+        assert_eq!(err, Error::FullscreenWindowMissing(WinId::new(2)));
+
+        let scene = scene.with_fullscreen([WinId::new(1)]).expect("listed");
+        assert!(scene.is_fullscreen(WinId::new(1)));
+        assert!(!scene.is_fullscreen(WinId::new(2)));
     }
 
     #[test]

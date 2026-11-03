@@ -1,9 +1,9 @@
 //! Recorded event streams replayed through the engine, with the resulting scene checked.
 
 use lutece::{
-    Action, Change, Direction, Effect, Engine, Error, Event, KeyPress, Keymap, Keysym, Layout,
-    ManageRule, Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene, SpawnCommand,
-    StackSet, Tag, WinId, WindowInfo, diff,
+    Action, Change, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap, Keysym,
+    Layout, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene,
+    SpawnCommand, StackSet, Tag, WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -243,6 +243,14 @@ fn arbitrary_event() -> impl Strategy<Value = Event> {
         })),
         (100u32..2000, 100u32..2000).prop_map(|(width, height)| screen(width, height)),
         Just(Event::OutputsChanged(vec![])),
+        ((0u64..8), any::<bool>()).prop_map(|(n, on)| Event::FullscreenRequested { id: w(n), on }),
+        // Insets up to 90 pixels leave room for the windows on the smallest screen.
+        ((0u32..4), (0u32..90), (0u32..90), (0u32..90), (0u32..90)).prop_map(
+            |(output, left, top, right, bottom)| Event::ReservedChanged {
+                output: OutputId::new(output),
+                insets: Insets::new(left, top, right, bottom),
+            }
+        ),
         prop::collection::vec(0u32..4, 0..4).prop_map(|ids| {
             let outputs = ids
                 .into_iter()
@@ -296,15 +304,30 @@ proptest! {
             if model.has_screen {
                 prop_assert_eq!(scene.placements().iter().map(|p| p.id.get()).collect::<BTreeSet<_>>(), shown);
                 prop_assert_eq!(scene.focus(), engine.stacks().focused());
-                // On each screen, floating windows are drawn above the tiled ones.
+                // On each screen, floating windows are drawn above the tiled ones, and a
+                // fullscreen window above both.
                 for (_, workspace) in engine.stacks().screens() {
-                    let floating: Vec<bool> = scene
+                    let shown: Vec<_> = scene
                         .placements()
                         .iter()
                         .filter(|p| workspace.contains(p.id))
+                        .collect();
+                    let beneath: Vec<bool> = shown
+                        .iter()
+                        .filter(|p| workspace.fullscreen() != Some(p.id))
                         .map(|p| workspace.is_floating(p.id))
                         .collect();
-                    prop_assert!(floating.windows(2).all(|pair| pair[0] <= pair[1]));
+                    prop_assert!(beneath.windows(2).all(|pair| pair[0] <= pair[1]));
+                    if let Some(id) = workspace.fullscreen() {
+                        prop_assert_eq!(shown.last().map(|p| p.id), Some(id));
+                        prop_assert_eq!(workspace.focus(), Some(id));
+                    }
+                    for placement in &shown {
+                        prop_assert_eq!(
+                            scene.is_fullscreen(placement.id),
+                            workspace.fullscreen() == Some(placement.id)
+                        );
+                    }
                 }
             } else {
                 prop_assert!(scene.placements().is_empty());
@@ -355,6 +378,7 @@ fn keymap() -> Keymap {
         ),
         (key('o', Modifiers::SUPER), Action::FocusNextOutput),
         (key('p', Modifiers::SUPER), Action::FocusPrevOutput),
+        (key('u', Modifiers::SUPER), Action::ToggleFullscreen),
         (key('o', shift), Action::SendToNextOutput),
         (key('p', shift), Action::SendToPrevOutput),
     ];
@@ -371,7 +395,7 @@ fn bound_engine() -> Engine {
 #[test]
 fn the_engine_lists_the_keys_to_grab() {
     let engine = bound_engine();
-    assert_eq!(engine.grabs().count(), 20);
+    assert_eq!(engine.grabs().count(), 21);
     assert_eq!(
         engine.grabs().next(),
         Some(key('q', Modifiers::SUPER | Modifiers::SHIFT))
@@ -924,4 +948,239 @@ proptest! {
         let rect = rect_of(&engine, 2);
         prop_assert!(rect.width() >= 1 && rect.height() >= 1);
     }
+}
+
+fn reserve(output: u32, left: u32, top: u32, right: u32, bottom: u32) -> Event {
+    Event::ReservedChanged {
+        output: OutputId::new(output),
+        insets: Insets::new(left, top, right, bottom),
+    }
+}
+
+fn fullscreen(raw: u64, on: bool) -> Event {
+    Event::FullscreenRequested { id: w(raw), on }
+}
+
+#[test]
+fn a_bar_shrinks_the_area_the_tiles_share() {
+    let mut engine = engine();
+    replay(
+        &mut engine,
+        [screen(1000, 600), reserve(0, 0, 30, 0, 0), open(1)],
+    );
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(0, 30, 1000, 570)
+    );
+
+    // A bar on each side: the reserve is the complete one, not added to the last.
+    replay(&mut engine, [reserve(0, 10, 30, 20, 40)]);
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(10, 30, 970, 530)
+    );
+
+    replay(&mut engine, [reserve(0, 0, 0, 0, 0)]);
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(0, 0, 1000, 600)
+    );
+}
+
+#[test]
+fn a_bar_only_reserves_space_on_its_own_output() {
+    let mut engine = engine();
+    replay(
+        &mut engine,
+        [two_outputs(), reserve(1, 0, 0, 0, 50), open(1)],
+    );
+    engine.handle(Event::FocusRequested(w(1)));
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(0, 0, 1000, 600)
+    );
+}
+
+#[test]
+fn a_bar_reported_before_the_screen_still_applies() {
+    let mut engine = engine();
+    replay(
+        &mut engine,
+        [reserve(0, 0, 30, 0, 0), open(1), screen(1000, 600)],
+    );
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(0, 30, 1000, 570)
+    );
+}
+
+#[test]
+fn a_floating_window_is_centered_in_what_the_bar_leaves() {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [
+            screen(1000, 600),
+            reserve(0, 0, 100, 0, 0),
+            open(1),
+            pressed('f', Modifiers::SUPER),
+        ],
+    );
+    // 60% of 1000x500, centered in the 500 pixels below the bar.
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(200, 200, 600, 300)
+    );
+}
+
+#[test]
+fn a_bar_claiming_most_of_the_screen_is_ignored() {
+    let mut engine = engine();
+    replay(
+        &mut engine,
+        [
+            screen(1000, 600),
+            reserve(0, 0, 5000, 0, 5000),
+            open(1),
+            open(2),
+        ],
+    );
+    assert_eq!(
+        scene(&engine).get(w(2)).map(|p| p.rect).map(|r| r.height()),
+        Some(600)
+    );
+}
+
+#[test]
+fn a_fullscreen_window_covers_the_bar_and_is_drawn_on_top() {
+    let mut engine = engine();
+    replay(
+        &mut engine,
+        [screen(1000, 600), reserve(0, 0, 30, 0, 0), open(1), open(2)],
+    );
+    let tiled_1 = scene(&engine).get(w(1)).map(|p| p.rect);
+
+    replay(&mut engine, [fullscreen(2, true)]);
+    let scene = scene(&engine);
+    assert_eq!(scene.get(w(2)).map(|p| p.rect), rect(0, 0, 1000, 600));
+    assert!(scene.is_fullscreen(w(2)));
+    assert!(!scene.is_fullscreen(w(1)));
+    assert_eq!(ids(&scene).last(), Some(&2));
+    // The other window keeps the slot it would have had, under the fullscreen one.
+    assert_eq!(scene.get(w(1)).map(|p| p.rect).map(|r| r.y()), Some(30));
+    assert!(tiled_1.is_some());
+
+    replay(&mut engine, [fullscreen(2, false)]);
+    let back = self::scene(&engine);
+    assert!(!back.is_fullscreen(w(2)));
+    assert_eq!(back.get(w(2)).map(|p| p.rect).map(|r| r.y()), Some(30));
+}
+
+#[test]
+fn the_fullscreen_key_toggles_the_focused_window() {
+    let mut engine = bound_engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+
+    engine.handle(pressed('u', Modifiers::SUPER));
+    assert!(scene(&engine).is_fullscreen(w(2)));
+    engine.handle(pressed('u', Modifiers::SUPER));
+    assert!(!scene(&engine).is_fullscreen(w(2)));
+
+    // Nothing to fullscreen on an empty workspace.
+    let mut empty = bound_engine();
+    replay(&mut empty, [screen(1000, 600)]);
+    let before = empty.clone();
+    empty.handle(pressed('u', Modifiers::SUPER));
+    assert_eq!(empty, before);
+}
+
+#[test]
+fn moving_the_focus_ends_fullscreen_so_the_focused_window_is_never_hidden() {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [screen(1000, 600), open(1), open(2), fullscreen(2, true)],
+    );
+
+    engine.handle(pressed('j', Modifiers::SUPER));
+    let scene = scene(&engine);
+    assert_eq!(scene.focus(), Some(w(1)));
+    assert!(!scene.is_fullscreen(w(2)));
+}
+
+#[test]
+fn a_fullscreen_floating_window_returns_to_where_it_floated() {
+    let mut engine = bound_engine();
+    replay(
+        &mut engine,
+        [screen(1000, 600), open(1), pressed('f', Modifiers::SUPER)],
+    );
+    let floated = scene(&engine).get(w(1)).map(|p| p.rect);
+
+    replay(&mut engine, [fullscreen(1, true)]);
+    assert_eq!(
+        scene(&engine).get(w(1)).map(|p| p.rect),
+        rect(0, 0, 1000, 600)
+    );
+    replay(&mut engine, [fullscreen(1, false)]);
+    assert_eq!(scene(&engine).get(w(1)).map(|p| p.rect), floated);
+}
+
+#[test]
+fn fullscreen_requests_for_unknown_windows_change_nothing() {
+    let mut engine = engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    let before = engine.clone();
+    replay(
+        &mut engine,
+        [
+            fullscreen(9, true),
+            fullscreen(9, false),
+            fullscreen(1, false),
+        ],
+    );
+    assert_eq!(engine, before);
+}
+
+#[test]
+fn a_fullscreen_request_does_not_switch_workspace() {
+    let mut stacks = stacks();
+    stacks.insert(w(1)).expect("new window");
+    stacks.focus_tag(&tag("2")).expect("workspace exists");
+    stacks.insert(w(2)).expect("new window");
+    stacks.focus_tag(&tag("1")).expect("workspace exists");
+    let mut engine = Engine::new(stacks, Layout::default());
+    replay(&mut engine, [screen(1000, 600), fullscreen(2, true)]);
+
+    assert_eq!(ids(&scene(&engine)), [1]);
+    assert_eq!(engine.stacks().current().tag().as_str(), "1");
+    // The hidden window is fullscreen when its workspace comes back.
+    engine.handle(Event::FocusRequested(w(2)));
+    assert!(scene(&engine).is_fullscreen(w(2)));
+}
+
+#[test]
+fn each_output_can_have_its_own_fullscreen_window() {
+    let mut engine = split_engine();
+    replay(&mut engine, [fullscreen(1, true), fullscreen(2, true)]);
+
+    let scene = scene(&engine);
+    assert_eq!(scene.get(w(1)).map(|p| p.rect), rect(0, 0, 1000, 600));
+    assert_eq!(scene.get(w(2)).map(|p| p.rect), rect(1000, 0, 1000, 600));
+    assert!(scene.is_fullscreen(w(1)) && scene.is_fullscreen(w(2)));
+}
+
+#[test]
+fn fullscreen_shows_up_in_the_diff_before_the_move() {
+    let mut engine = engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    let before = scene(&engine);
+
+    replay(&mut engine, [fullscreen(1, true)]);
+    let changes = diff(&before, &scene(&engine));
+    assert_eq!(changes, [Change::Fullscreen { id: w(1), on: true }]);
+
+    replay(&mut engine, [reserve(0, 0, 30, 0, 0)]);
+    // The window is fullscreen, so the bar does not move it.
+    assert!(diff(&scene(&engine), &scene(&engine)).is_empty());
 }

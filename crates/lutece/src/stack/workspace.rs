@@ -148,6 +148,10 @@ pub struct Workspace {
     /// The windows the layout leaves alone. Every key is a window in `stack`: `remove`
     /// drops the entry and `set_float` refuses strangers.
     floating: HashMap<WinId, Float>,
+    /// The window that fills the whole screen. It is always the focused window: any
+    /// change of focus drops it (see `settle`), so the window that has the keyboard is
+    /// never hidden behind a fullscreen one.
+    fullscreen: Option<WinId>,
 }
 
 impl Workspace {
@@ -163,6 +167,35 @@ impl Workspace {
             layout,
             tile_ratio,
             floating: HashMap::new(),
+            fullscreen: None,
+        }
+    }
+
+    /// The window that fills the whole screen, if any. It is the focused window; moving
+    /// the focus to another window, or closing this one, ends its fullscreen.
+    #[must_use]
+    pub fn fullscreen(&self) -> Option<WinId> {
+        self.fullscreen
+    }
+
+    /// Makes `id` fullscreen, or ends its fullscreen with `on` false. Fullscreening
+    /// focuses the window and replaces any other fullscreen window. A window that is not
+    /// on this workspace is ignored.
+    pub(crate) fn set_fullscreen(&mut self, id: WinId, on: bool) {
+        if !on {
+            if self.fullscreen == Some(id) {
+                self.fullscreen = None;
+            }
+        } else if self.focus_on(id) {
+            self.fullscreen = Some(id);
+        }
+    }
+
+    /// Restores the rule that only the focused window can be fullscreen. Called after
+    /// every change of the stack.
+    fn settle(&mut self) {
+        if self.fullscreen != self.focus() {
+            self.fullscreen = None;
         }
     }
 
@@ -282,6 +315,7 @@ impl Workspace {
         } else {
             self.stack = Some(Stack::new(id));
         }
+        self.settle();
     }
 
     pub(crate) fn remove(&mut self, id: WinId) {
@@ -289,18 +323,21 @@ impl Workspace {
         if let Some(stack) = self.stack.take() {
             self.stack = stack.remove(id);
         }
+        self.settle();
     }
 
     pub(crate) fn focus_next(&mut self) {
         if let Some(stack) = self.stack.as_mut() {
             stack.focus_next();
         }
+        self.settle();
     }
 
     pub(crate) fn focus_prev(&mut self) {
         if let Some(stack) = self.stack.as_mut() {
             stack.focus_prev();
         }
+        self.settle();
     }
 
     pub(crate) fn swap_next(&mut self) {
@@ -316,7 +353,9 @@ impl Workspace {
     }
 
     pub(crate) fn focus_on(&mut self, id: WinId) -> bool {
-        self.stack.as_mut().is_some_and(|s| s.focus_on(id))
+        let found = self.stack.as_mut().is_some_and(|s| s.focus_on(id));
+        self.settle();
+        found
     }
 }
 
@@ -434,6 +473,62 @@ mod tests {
         }
         let order: Vec<u64> = ws.floats().map(|(id, _)| id.get()).collect();
         assert_eq!(order, ws.windows().map(WinId::get).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn fullscreen_belongs_to_the_focused_window_only() {
+        let mut ws = workspace(Layout::default());
+        ws.insert(w(1));
+        ws.insert(w(2));
+        ws.set_fullscreen(w(2), true);
+        assert_eq!(ws.fullscreen(), Some(w(2)));
+
+        ws.focus_next();
+        assert_eq!(ws.fullscreen(), None);
+        ws.focus_next();
+        assert_eq!(ws.fullscreen(), None, "coming back does not restore it");
+    }
+
+    #[test]
+    fn fullscreen_ends_when_the_window_closes_or_a_new_one_opens() {
+        let mut ws = workspace(Layout::default());
+        ws.insert(w(1));
+        ws.set_fullscreen(w(1), true);
+        ws.insert(w(2));
+        assert_eq!(ws.fullscreen(), None);
+
+        ws.set_fullscreen(w(2), true);
+        ws.remove(w(2));
+        assert_eq!(ws.fullscreen(), None);
+    }
+
+    #[test]
+    fn asking_for_fullscreen_focuses_the_window_and_replaces_the_old_one() {
+        let mut ws = workspace(Layout::default());
+        ws.insert(w(1));
+        ws.insert(w(2));
+        ws.set_fullscreen(w(2), true);
+
+        ws.set_fullscreen(w(1), true);
+        assert_eq!((ws.fullscreen(), ws.focus()), (Some(w(1)), Some(w(1))));
+
+        ws.set_fullscreen(w(1), false);
+        assert_eq!(ws.fullscreen(), None);
+        // Strangers, and ending the fullscreen of another window, change nothing.
+        ws.set_fullscreen(w(9), true);
+        ws.set_fullscreen(w(2), false);
+        assert_eq!((ws.fullscreen(), ws.focus()), (None, Some(w(1))));
+    }
+
+    #[test]
+    fn swapping_keeps_the_focused_window_fullscreen() {
+        let mut ws = workspace(Layout::default());
+        ws.insert(w(1));
+        ws.insert(w(2));
+        ws.set_fullscreen(w(2), true);
+        ws.swap_next();
+        ws.swap_prev();
+        assert_eq!(ws.fullscreen(), Some(w(2)));
     }
 
     #[test]
