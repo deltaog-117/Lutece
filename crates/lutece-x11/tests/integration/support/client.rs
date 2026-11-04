@@ -48,6 +48,8 @@ pub struct Spec {
     /// The twelve values of `_NET_WM_STRUT_PARTIAL`, for a window that is a bar.
     bar: Option<[u32; 12]>,
     fullscreen: bool,
+    /// Whether the window opts out of management (override-redirect), as a menu does.
+    unmanaged: bool,
 }
 
 impl Spec {
@@ -59,7 +61,15 @@ impl Spec {
             transient_for: None,
             bar: None,
             fullscreen: false,
+            unmanaged: false,
         }
+    }
+
+    /// Makes the window override-redirect: the window manager is not asked about it and
+    /// does not place it, as with a menu or a bar that manages itself.
+    pub const fn unmanaged(mut self) -> Self {
+        self.unmanaged = true;
+        self
     }
 
     /// Makes the window a bar (type dock) reserving `depth` pixels along the top edge.
@@ -159,7 +169,7 @@ impl Client {
                 0,
                 WindowClass::INPUT_OUTPUT,
                 COPY_FROM_PARENT,
-                &CreateWindowAux::new(),
+                &CreateWindowAux::new().override_redirect(u32::from(spec.unmanaged)),
             )
             .expect("create_window");
         // Described before it is mapped: the window manager reads this at the map request.

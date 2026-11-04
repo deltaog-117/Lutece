@@ -86,6 +86,74 @@ fn two_bars_on_one_edge_reserve_the_larger_one() {
 }
 
 #[test]
+fn a_bar_that_manages_itself_still_reserves_its_struts() {
+    let Some(session) = Session::start() else {
+        return;
+    };
+    let bar = session.client.open(BAR.top_bar(30).unmanaged());
+    let window = session.client.open(Spec::default());
+
+    session.client.expect_geometry(window, below(30));
+    // It was never managed, so it stays where it put itself.
+    session
+        .client
+        .expect_geometry(bar, Geometry::new(0, 0, SCREEN_WIDTH, 30));
+}
+
+#[test]
+fn an_unmanaged_window_without_struts_reserves_nothing() {
+    let Some(session) = Session::start() else {
+        return;
+    };
+    session.client.open(Spec::at(100, 100, 200, 80).unmanaged());
+    let window = session.client.open(Spec::default());
+
+    session.client.expect_geometry(window, Session::screen());
+}
+
+#[test]
+fn an_unmanaged_bar_that_sets_its_struts_after_it_maps_is_honoured() {
+    let Some(session) = Session::start() else {
+        return;
+    };
+    let bar = session.client.open(BAR.unmanaged());
+    let window = session.client.open(Spec::default());
+    session.client.expect_geometry(window, Session::screen());
+
+    session
+        .client
+        .set_strut(bar, [0, 0, 30, 0, 0, 0, 0, 0, 0, u32::MAX, 0, 0]);
+
+    session.client.expect_geometry(window, below(30));
+}
+
+#[test]
+fn an_unmanaged_bar_that_was_showing_before_the_window_manager_started_is_honoured() {
+    let Some(mut session) = Session::bare() else {
+        return;
+    };
+    session.client.open(BAR.top_bar(30).unmanaged());
+    session.start_wm();
+
+    let window = session.client.open(Spec::default());
+    session.client.expect_geometry(window, below(30));
+}
+
+#[test]
+fn closing_an_unmanaged_bar_gives_its_space_back() {
+    let Some(session) = Session::start() else {
+        return;
+    };
+    let bar = session.client.open(BAR.top_bar(30).unmanaged());
+    let window = session.client.open(Spec::default());
+    session.client.expect_geometry(window, below(30));
+
+    session.client.destroy(bar);
+
+    session.client.expect_geometry(window, Session::screen());
+}
+
+#[test]
 fn a_client_cannot_use_a_bar_to_squeeze_the_windows_out() {
     let Some(session) = Session::start() else {
         return;

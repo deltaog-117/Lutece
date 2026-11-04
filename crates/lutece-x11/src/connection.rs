@@ -299,6 +299,18 @@ impl X11Backend {
             return Ok(());
         }
 
+        // A bar that opts out of management (override-redirect) sends no map request, so it
+        // is found when it is mapped. Menus and tooltips pass through here too and, having
+        // no strut, are not kept.
+        if let XEvent::MapNotify(mapped) = event
+            && mapped.override_redirect
+        {
+            if watch_unmanaged(conn, atoms, reserve, mapped.window)? {
+                queued.extend(reserve.changes(screen_size(conn, *root)?));
+            }
+            return Ok(());
+        }
+
         // Bars are not managed: they are shown where they ask, and only what they reserve
         // reaches the core.
         if let XEvent::MapRequest(request) = event
@@ -321,9 +333,17 @@ impl X11Backend {
         if let XEvent::PropertyNotify(change) = event {
             let strut_changed =
                 change.atom == atoms._NET_WM_STRUT || change.atom == atoms._NET_WM_STRUT_PARTIAL;
-            if strut_changed && reserve.is_dock(change.window) {
-                track_dock(conn, atoms, reserve, change.window)?;
-                queued.extend(reserve.changes(screen_size(conn, *root)?));
+            // Only bars and the unmanaged windows watched in `watch_unmanaged` send these.
+            if strut_changed {
+                let changed = if reserve.is_dock(change.window) {
+                    track_dock(conn, atoms, reserve, change.window)?;
+                    true
+                } else {
+                    watch_unmanaged(conn, atoms, reserve, change.window)?
+                };
+                if changed {
+                    queued.extend(reserve.changes(screen_size(conn, *root)?));
+                }
             }
             return Ok(());
         }
@@ -378,6 +398,11 @@ fn existing_windows(
         let Ok(attributes) = cookie.reply() else {
             continue;
         };
+        // An unmanaged window that was already showing may be a bar; it is never managed.
+        if attributes.map_state == MapState::VIEWABLE && attributes.override_redirect {
+            watch_unmanaged(conn, atoms, reserve, child)?;
+            continue;
+        }
         // A bar that was already showing is tracked, not managed.
         let showing = attributes.map_state == MapState::VIEWABLE && !attributes.override_redirect;
         if showing && is_dock(conn, atoms, child) {
@@ -429,11 +454,42 @@ fn track_dock(
     reserve: &mut Reserve,
     window: Window,
 ) -> Result<()> {
-    // The window can be destroyed while we ask; its destruction then arrives as an event.
+    listen_for_properties(conn, window);
+    reserve.set_dock(window, read_strut(conn, atoms, window));
+    Ok(())
+}
+
+/// Starts or stops tracking an override-redirect window as a bar, by whether it reserves
+/// space now, and listens for its struts to change so a bar that sets them after it maps is
+/// found. Returns whether the bars changed. Only the struts count: such a window is never
+/// managed, so whether it calls itself a dock makes no difference.
+fn watch_unmanaged(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    reserve: &mut Reserve,
+    window: Window,
+) -> Result<bool> {
+    listen_for_properties(conn, window);
+    let strut = read_strut(conn, atoms, window);
+    if strut.reserves() {
+        reserve.set_dock(window, strut);
+        Ok(true)
+    } else {
+        Ok(reserve.remove_dock(window))
+    }
+}
+
+/// Asks to be told when `window`'s properties change. The window can be destroyed while we
+/// ask; its destruction then arrives as an event.
+fn listen_for_properties(conn: &RustConnection, window: Window) {
     let _ = conn.change_window_attributes(
         window,
         &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
     );
+}
+
+/// What `window` reserves, from its two strut properties.
+fn read_strut(conn: &RustConnection, atoms: &Atoms, window: Window) -> Strut {
     let partial = cardinals(
         conn,
         window,
@@ -441,8 +497,7 @@ fn track_dock(
         AtomEnum::CARDINAL,
     );
     let plain = cardinals(conn, window, atoms._NET_WM_STRUT, AtomEnum::CARDINAL);
-    reserve.set_dock(window, Strut::from_properties(&partial, &plain));
-    Ok(())
+    Strut::from_properties(&partial, &plain)
 }
 
 /// The request to make a window fullscreen, if it was just opened with that state set.

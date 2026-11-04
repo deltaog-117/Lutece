@@ -87,6 +87,12 @@ impl Strut {
         Self::NONE
     }
 
+    /// Whether the strut takes any space at all. A window with none is not a bar, however
+    /// it describes itself.
+    pub(crate) fn reserves(&self) -> bool {
+        self.left > 0 || self.right > 0 || self.top > 0 || self.bottom > 0
+    }
+
     /// How far this strut reaches into `output`, on a screen `screen` pixels wide and
     /// high. An edge of the screen that the output does not touch, or a part of the edge
     /// that lies beside the output, reserves nothing there.
@@ -235,6 +241,19 @@ mod tests {
         assert_eq!(plain.left_span, WHOLE_EDGE);
 
         assert_eq!(Strut::from_properties(&[1, 2], &[3]), Strut::NONE);
+    }
+
+    #[test]
+    fn a_strut_reserves_only_if_some_edge_has_depth() {
+        assert!(!Strut::NONE.reserves());
+        // Spans alone take no space.
+        let spans_only = Strut::from_properties(&[0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8], &[]);
+        assert!(!spans_only.reserves());
+        for edge in 0..4 {
+            let mut plain = [0_u32; 4];
+            plain[edge] = 1;
+            assert!(Strut::from_properties(&[], &plain).reserves());
+        }
     }
 
     #[test]
