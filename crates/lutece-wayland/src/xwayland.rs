@@ -26,26 +26,72 @@ use smithay::xwayland::{X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler};
 use std::io;
 use std::os::fd::OwnedFd;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU32, Ordering};
+use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt};
+use x11rb::rust_connection::RustConnection;
 
-/// Starts Xwayland on `display` and, once it is ready, the window manager for it. The
-/// outcome is recorded in `State::x_display` or `State::xwayland_failure`.
+/// How many display numbers [`Displays`] cycles through.
+const DISPLAY_RANGE: u32 = 256;
+
+/// Hands out X display numbers so that no two Xwayland instances of one process share one
+/// until the whole range has been used.
+///
+/// Smithay would pick the lowest free number, so a number released by one instance is taken
+/// at once by the next. Each instance cleans up its lock and socket files by path, and an
+/// older Xwayland that is still shutting down deletes them from under the newer one, which
+/// then refuses every client. A number that was not used before has no older instance.
+#[derive(Debug, Default)]
+struct Displays {
+    next: AtomicU32,
+}
+
+impl Displays {
+    /// The next candidate. The first one is 0, so a lone Xwayland still gets the lowest
+    /// free number once the busy ones are skipped.
+    fn take(&self) -> u32 {
+        self.next.fetch_add(1, Ordering::Relaxed) % DISPLAY_RANGE
+    }
+}
+
+static DISPLAYS: Displays = Displays {
+    next: AtomicU32::new(0),
+};
+
+/// Starts Xwayland and, once it is ready, the window manager for it. The outcome is
+/// recorded in `State::x_display` or `State::xwayland_failure`.
 ///
 /// # Errors
 ///
-/// Returns an error if the `Xwayland` program cannot be started or added to the loop.
+/// Returns an error if the `Xwayland` program cannot be started or added to the loop, or
+/// if every display number is in use.
 pub(crate) fn start(
     handle: &LoopHandle<'static, State>,
     display: &DisplayHandle,
 ) -> io::Result<()> {
-    let (xwayland, client) = XWayland::spawn(
-        display,
-        None,
-        std::iter::empty::<(String, String)>(),
-        true,
-        Stdio::null(),
-        Stdio::null(),
-        |_| {},
-    )?;
+    let mut spawned = None;
+    for _ in 0..DISPLAY_RANGE {
+        let attempt = XWayland::spawn(
+            display,
+            Some(DISPLAYS.take()),
+            std::iter::empty::<(String, String)>(),
+            true,
+            Stdio::null(),
+            Stdio::null(),
+            |_| {},
+        );
+        match attempt {
+            Ok(started) => {
+                spawned = Some(started);
+                break;
+            }
+            // Another program holds this number; try the next.
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let (xwayland, client) = spawned.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::AddrInUse, "every X display number is in use")
+    })?;
     let wm_handle = handle.clone();
     handle
         .insert_source(xwayland, move |event, (), state| match event {
@@ -53,10 +99,17 @@ pub(crate) fn start(
                 x11_socket,
                 display_number,
             } => match X11Wm::start_wm(wm_handle.clone(), x11_socket, client.clone()) {
-                Ok(xwm) => {
-                    state.xwm = Some(xwm);
-                    state.x_display = Some(display_number);
-                }
+                Ok(xwm) => match StateReader::connect(display_number) {
+                    Ok(reader) => {
+                        state.xwm = Some(xwm);
+                        state.x_state = Some(reader);
+                        state.x_display = Some(display_number);
+                    }
+                    Err(error) => {
+                        state.xwayland_failure =
+                            Some(format!("cannot read the state of its windows: {error}"));
+                    }
+                },
                 Err(error) => {
                     state.xwayland_failure =
                         Some(format!("cannot start its window manager: {error}"));
@@ -69,6 +122,64 @@ pub(crate) fn start(
         .map_err(|error| io::Error::other(error.to_string()))?;
     Ok(())
 }
+
+/// A second connection to Xwayland that reads what Smithay's window manager leaves
+/// alone: the `_NET_WM_STATE` a program sets before it maps its window. Smithay treats
+/// that property as the window manager's to write, so a program that starts fullscreen
+/// would otherwise never be seen asking.
+///
+/// A read waits for Xwayland's answer. That is no new kind of wait: Smithay's own window
+/// manager already asks Xwayland about every window it maps, on this same thread.
+pub(crate) struct StateReader {
+    conn: RustConnection,
+    state: Atom,
+    fullscreen: Atom,
+}
+
+impl StateReader {
+    /// Connects to the Xwayland that serves display `number`.
+    ///
+    /// # Errors
+    ///
+    /// Returns what went wrong if the display cannot be reached or the two atoms cannot
+    /// be looked up.
+    fn connect(number: u32) -> Result<Self, String> {
+        let (conn, _) =
+            RustConnection::connect(Some(&format!(":{number}"))).map_err(|e| e.to_string())?;
+        let intern = |name: &[u8]| {
+            conn.intern_atom(false, name)
+                .map_err(|e| e.to_string())?
+                .reply()
+                .map(|reply| reply.atom)
+                .map_err(|e| e.to_string())
+        };
+        let state = intern(b"_NET_WM_STATE")?;
+        let fullscreen = intern(b"_NET_WM_STATE_FULLSCREEN")?;
+        Ok(Self {
+            conn,
+            state,
+            fullscreen,
+        })
+    }
+
+    /// Whether the X window `window` has the fullscreen state set. A window that is gone
+    /// or has no such property is not fullscreen.
+    pub(crate) fn is_fullscreen(&self, window: u32) -> bool {
+        self.conn
+            .get_property(false, window, self.state, AtomEnum::ATOM, 0, STATE_ATOMS)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|reply| {
+                reply
+                    .value32()
+                    .map(|mut atoms| atoms.any(|a| a == self.fullscreen))
+            })
+            .unwrap_or(false)
+    }
+}
+
+/// How many atoms of `_NET_WM_STATE` are read; a window sets a handful at most.
+const STATE_ATOMS: u32 = 64;
 
 impl State {
     /// Reports every X11 window that now has a committed surface to the core.
@@ -85,6 +196,11 @@ impl State {
                     transient_for,
                 },
             });
+            // After the window opens, so the core knows it when it is asked.
+            if self.windows.take_early_x11_fullscreen(window.window_id()) {
+                self.events
+                    .push(Event::FullscreenRequested { id, on: true });
+            }
         }
     }
 
@@ -96,9 +212,8 @@ impl State {
     }
 
     /// An X11 program asked to be fullscreen (`on`) or to stop being, with a
-    /// `_NET_WM_STATE` message. A window that is not announced yet is ignored: Smithay does
-    /// not read the state a program sets before it maps, so one that starts fullscreen
-    /// that way is not seen as asking.
+    /// `_NET_WM_STATE` message. A window that is not announced yet is ignored here; one
+    /// that set the state before it mapped is found by [`StateReader`] when it asks to map.
     fn x11_fullscreen(&mut self, window: &X11Surface, on: bool) {
         if let Some(id) = self.windows.id_of_x11(window.window_id()) {
             self.events.push(Event::FullscreenRequested { id, on });
@@ -125,6 +240,15 @@ impl XwmHandler for State {
         // A window that cannot be mapped is already gone; nothing is left to manage.
         if window.set_mapped(true).is_err() {
             return;
+        }
+        // Read now: the program set the state before asking to map, and the window is not
+        // announced until its surface is committed.
+        if self
+            .x_state
+            .as_ref()
+            .is_some_and(|reader| reader.is_fullscreen(window.window_id()))
+        {
+            self.windows.remember_x11_fullscreen(window.window_id());
         }
         self.windows.track_x11(window);
         self.announce_x11_windows();
@@ -222,6 +346,7 @@ impl XwmHandler for State {
 
     fn disconnected(&mut self, _xwm: XwmId) {
         self.xwm = None;
+        self.x_state = None;
         self.x_display = None;
     }
 }
@@ -259,6 +384,27 @@ delegate_xwayland_shell!(State);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_numbers_start_at_zero_and_do_not_repeat_within_the_range() {
+        let displays = Displays::default();
+        let taken: Vec<u32> = (0..DISPLAY_RANGE).map(|_| displays.take()).collect();
+        assert_eq!(taken.first(), Some(&0));
+        let mut sorted = taken.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), taken.len(), "no number repeated");
+        assert!(taken.iter().all(|number| *number < DISPLAY_RANGE));
+    }
+
+    #[test]
+    fn display_numbers_wrap_instead_of_overflowing() {
+        let displays = Displays {
+            next: AtomicU32::new(u32::MAX),
+        };
+        assert!(displays.take() < DISPLAY_RANGE);
+        assert!(displays.take() < DISPLAY_RANGE, "the counter wrapped");
+    }
 
     #[test]
     fn a_request_changes_only_what_it_names() {

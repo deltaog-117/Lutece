@@ -10,6 +10,7 @@ use crate::pointer::PointerState;
 use crate::scale::Scale;
 use crate::translate;
 use crate::windows::Windows;
+use crate::xwayland::StateReader;
 use lutece::{Event, Insets, KeyPress, Output as CoreOutput, OutputId, Rect, WindowInfo};
 use smithay::backend::input::{KeyState, Keycode};
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
@@ -100,6 +101,8 @@ pub(crate) struct State {
     pub(crate) xwayland_shell: XWaylandShellState,
     /// The window manager side of Xwayland, once it is running.
     pub(crate) xwm: Option<X11Wm>,
+    /// Reads the window state Smithay leaves alone, once Xwayland is running.
+    pub(crate) x_state: Option<StateReader>,
     /// The X11 display number programs use to reach Xwayland, once it is running.
     pub(crate) x_display: Option<u32>,
     /// Why Xwayland could not start, until the caller has been told.
@@ -163,6 +166,7 @@ impl State {
             suppressed: HashSet::new(),
             xwayland_shell: XWaylandShellState::new::<Self>(display),
             xwm: None,
+            x_state: None,
             x_display: None,
             xwayland_failure: None,
         })

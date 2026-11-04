@@ -86,6 +86,9 @@ pub(crate) struct Windows {
     /// Toplevels that asked for fullscreen before they were announced, as a player that
     /// starts fullscreen does. The request is passed on when the window opens.
     early_fullscreen: Vec<WlSurface>,
+    /// X11 windows (by their X window number) that set the fullscreen state before they
+    /// mapped. Like `early_fullscreen`, passed on when the window opens.
+    early_x11_fullscreen: Vec<u32>,
 }
 
 impl Windows {
@@ -134,6 +137,22 @@ impl Windows {
         let before = self.early_fullscreen.len();
         self.early_fullscreen.retain(|asked| asked != surface);
         self.early_fullscreen.len() != before
+    }
+
+    /// Remembers that the X11 window numbered `window` set the fullscreen state before it
+    /// mapped.
+    pub(crate) fn remember_x11_fullscreen(&mut self, window: u32) {
+        if !self.early_x11_fullscreen.contains(&window) {
+            self.early_x11_fullscreen.push(window);
+        }
+    }
+
+    /// Whether the X11 window numbered `window` set the fullscreen state before it mapped;
+    /// forgets the ask.
+    pub(crate) fn take_early_x11_fullscreen(&mut self, window: u32) -> bool {
+        let before = self.early_x11_fullscreen.len();
+        self.early_x11_fullscreen.retain(|asked| *asked != window);
+        self.early_x11_fullscreen.len() != before
     }
 
     /// Remembers an X11 window whose map request was granted, until its surface is
@@ -195,6 +214,8 @@ impl Windows {
         let same = |other: &X11Surface| other.window_id() == window.window_id();
         self.pending_x11.retain(|pending| !same(pending));
         self.override_redirect.retain(|shown| !same(shown));
+        self.early_x11_fullscreen
+            .retain(|asked| *asked != window.window_id());
         let id = self.id_of_x11(window.window_id())?;
         self.release(id);
         Some(id)

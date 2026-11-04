@@ -171,7 +171,39 @@ impl Fixture {
         self.x.flush().expect("flush");
     }
 
+    /// Like [`open`](Self::open) for a window that sets the fullscreen state before it maps,
+    /// as a video player started in fullscreen does.
+    fn open_fullscreen(&self, size: (u16, u16), title: &str, class: &str) -> Window {
+        let window = self.x.generate_id().expect("window id");
+        self.create(window, (10, 10), size, title, class, false);
+        let state = [self.intern("_NET_WM_STATE_FULLSCREEN")];
+        self.x
+            .change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                window,
+                self.intern("_NET_WM_STATE"),
+                AtomEnum::ATOM,
+                &state,
+            )
+            .expect("_NET_WM_STATE");
+        self.map_and_draw(window, size);
+        window
+    }
+
     fn create_and_map(
+        &self,
+        window: Window,
+        at: (i16, i16),
+        size: (u16, u16),
+        title: &str,
+        class: &str,
+        menu: bool,
+    ) {
+        self.create(window, at, size, title, class, menu);
+        self.map_and_draw(window, size);
+    }
+
+    fn create(
         &self,
         window: Window,
         at: (i16, i16),
@@ -216,6 +248,9 @@ impl Fixture {
                 format!("{}\0{class}\0", class.to_lowercase()).as_bytes(),
             )
             .expect("class");
+    }
+
+    fn map_and_draw(&self, window: Window, size: (u16, u16)) {
         self.x.map_window(window).expect("map_window");
         // Xwayland shows a window on a surface only once there is something to show.
         let gc = self.x.generate_id().expect("gc id");
@@ -349,6 +384,57 @@ fn an_x11_program_can_ask_to_be_fullscreen_and_to_stop() {
             .position(window)
             .filter(|at| *at == (0, 30, 1000, 570))
     });
+}
+
+#[test]
+fn an_x11_program_that_starts_fullscreen_is_seen_asking() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    reserve_a_top_band(&mut fixture);
+    let window = fixture.open_fullscreen((50, 50), "video", "Player");
+
+    // The request comes after the window opens, so the core knows the window by then.
+    fixture.wait_for_events("the window and its request", |events| {
+        let opened_at = events
+            .iter()
+            .position(|event| matches!(event, Event::WindowOpened { .. }));
+        let asked_at = events
+            .iter()
+            .position(|event| matches!(event, Event::FullscreenRequested { on: true, .. }));
+        matches!((opened_at, asked_at), (Some(opened), Some(asked)) if opened < asked)
+    });
+
+    fixture.drive();
+    fixture.wait_for("the window to cover the band", |fixture| {
+        fixture
+            .position(window)
+            .filter(|at| *at == (0, 0, 1000, 600))
+    });
+}
+
+#[test]
+fn an_x11_program_that_does_not_ask_stays_tiled_below_the_band() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    reserve_a_top_band(&mut fixture);
+    let window = fixture.open((10, 10), (50, 50), "plain", "Plain", false);
+    fixture.wait_for_events("the window", |events| !opened(events).is_empty());
+    fixture.drive();
+    fixture.wait_for("the window below the band", |fixture| {
+        fixture
+            .position(window)
+            .filter(|at| *at == (0, 30, 1000, 570))
+    });
+
+    assert!(
+        !fixture
+            .seen
+            .iter()
+            .any(|event| matches!(event, Event::FullscreenRequested { .. })),
+        "no request was made"
+    );
 }
 
 #[test]

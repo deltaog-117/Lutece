@@ -13,11 +13,12 @@ lutece = { path = "../lutece" }
 rustix = { version = "1", features = ["event"] }
 smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "backend_drm", "backend_gbm", "backend_udev", "backend_libinput", "backend_session_libseat", "renderer_gl", "renderer_multi", "wayland_frontend", "desktop", "xwayland"] }
 thiserror = "2"
+# A second connection to Xwayland, for the window state Smithay does not read.
+x11rb = "0.14"
 
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"
 wayland-client = "0.31"
-x11rb = "0.14"
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
