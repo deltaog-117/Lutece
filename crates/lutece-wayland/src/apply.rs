@@ -27,6 +27,8 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
     // Windows whose fullscreen state changed. The state rides on the configure that
     // places the window, when there is one; the rest get theirs after all the changes.
     let mut restated = Vec::new();
+    // Set when the order the windows are drawn in may have changed, so Xwayland is told once.
+    let mut restack_x11 = false;
     for change in changes {
         match change {
             Change::Hide(id) => {
@@ -45,15 +47,23 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
                     && set_fullscreen(entry, *on)
                 {
                     restated.push(*id);
+                    restack_x11 = true;
                 }
             }
             Change::Show(placement) | Change::Move(placement) => place(state, placement),
-            Change::Restack(order) => state.windows.restack(order),
+            Change::Restack(order) => {
+                state.windows.restack(order);
+                restack_x11 = true;
+            }
             Change::Focus(id) => focus(state, *id),
             // `Change` may grow; a change this backend does not know is not carried out.
             _ => {}
         }
     }
+    if restack_x11 {
+        state.restack_x11();
+    }
+    state.sync_active_window();
     for id in restated {
         if let Some(Entry {
             shell: Shell::Xdg(toplevel),

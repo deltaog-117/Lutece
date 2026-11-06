@@ -27,8 +27,13 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
-use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt};
+use x11rb::connection::Connection;
+use x11rb::protocol::Event as XEvent;
+use x11rb::protocol::xproto::{
+    Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, EventMask, PropMode, Window,
+};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 /// How many display numbers [`Displays`] cycles through.
 const DISPLAY_RANGE: u32 = 256;
@@ -123,17 +128,22 @@ pub(crate) fn start(
     Ok(())
 }
 
-/// A second connection to Xwayland that reads what Smithay's window manager leaves
-/// alone: the `_NET_WM_STATE` a program sets before it maps its window. Smithay treats
+/// A second connection to Xwayland for what Smithay's window manager leaves alone.
+///
+/// It reads the `_NET_WM_STATE` a program sets before it maps its window: Smithay treats
 /// that property as the window manager's to write, so a program that starts fullscreen
-/// would otherwise never be seen asking.
+/// would otherwise never be seen asking. It also writes `_NET_ACTIVE_WINDOW` on the root:
+/// Smithay only hears of focus changes on the root window, so what it writes there is the
+/// root itself or the window that just lost the focus, never the window that has it.
 ///
 /// A read waits for Xwayland's answer. That is no new kind of wait: Smithay's own window
 /// manager already asks Xwayland about every window it maps, on this same thread.
 pub(crate) struct StateReader {
     conn: RustConnection,
+    root: Window,
     state: Atom,
     fullscreen: Atom,
+    active: Atom,
 }
 
 impl StateReader {
@@ -144,8 +154,9 @@ impl StateReader {
     /// Returns what went wrong if the display cannot be reached or the two atoms cannot
     /// be looked up.
     fn connect(number: u32) -> Result<Self, String> {
-        let (conn, _) =
+        let (conn, screen) =
             RustConnection::connect(Some(&format!(":{number}"))).map_err(|e| e.to_string())?;
+        let root = conn.setup().roots[screen].root;
         let intern = |name: &[u8]| {
             conn.intern_atom(false, name)
                 .map_err(|e| e.to_string())?
@@ -155,11 +166,55 @@ impl StateReader {
         };
         let state = intern(b"_NET_WM_STATE")?;
         let fullscreen = intern(b"_NET_WM_STATE_FULLSCREEN")?;
+        let active = intern(b"_NET_ACTIVE_WINDOW")?;
+        // Hear of every write to the root's properties, to notice Smithay overwriting
+        // the active window. Unlike redirecting its children, this is open to any client.
+        conn.change_window_attributes(
+            root,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )
+        .map_err(|e| e.to_string())?;
+        conn.flush().map_err(|e| e.to_string())?;
         Ok(Self {
             conn,
+            root,
             state,
             fullscreen,
+            active,
         })
+    }
+
+    /// Sets `_NET_ACTIVE_WINDOW` to the X window numbered `window`; 0 names none. If the
+    /// server is gone there is nothing to tell.
+    fn set_active_window(&self, window: Window) {
+        drop(self.conn.change_property32(
+            PropMode::REPLACE,
+            self.root,
+            self.active,
+            AtomEnum::WINDOW,
+            &[window],
+        ));
+        drop(self.conn.flush());
+    }
+
+    /// The window `_NET_ACTIVE_WINDOW` names now; 0 when it names none or cannot be read.
+    fn active_window(&self) -> Window {
+        self.conn
+            .get_property(false, self.root, self.active, AtomEnum::WINDOW, 0, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|reply| reply.value32().and_then(|mut windows| windows.next()))
+            .unwrap_or(0)
+    }
+
+    /// Whether `_NET_ACTIVE_WINDOW` was written since this was last asked, by anyone,
+    /// this connection included.
+    fn active_window_written(&self) -> bool {
+        let mut written = false;
+        while let Ok(Some(event)) = self.conn.poll_for_event() {
+            written |= matches!(event, XEvent::PropertyNotify(n) if n.atom == self.active);
+        }
+        written
     }
 
     /// Whether the X window `window` has the fullscreen state set. A window that is gone
@@ -201,6 +256,42 @@ impl State {
                 self.events
                     .push(Event::FullscreenRequested { id, on: true });
             }
+        }
+    }
+
+    /// Puts the stacking order of the X11 windows in step with the scene's: Xwayland
+    /// keeps `_NET_CLIENT_LIST_STACKING` in the order the windows mapped otherwise, so a
+    /// pager or a program that restacks itself would see the wrong one.
+    pub(crate) fn restack_x11(&mut self) {
+        let Some(xwm) = self.xwm.as_mut() else {
+            return;
+        };
+        let order = self.windows.x11_in_order();
+        // If Xwayland is gone there is nothing to order.
+        // Smithay takes the order from the top down.
+        drop(xwm.update_stacking_order_downwards(order.iter().rev()));
+    }
+
+    /// Makes `_NET_ACTIVE_WINDOW` name the X11 window that has the keyboard focus, or no
+    /// window when a Wayland surface has it. A write is only made when the property is
+    /// not right, so it settles even though this connection hears its own writes.
+    pub(crate) fn sync_active_window(&mut self) {
+        let Some(reader) = self.x_state.as_ref() else {
+            return;
+        };
+        let want = self
+            .seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus())
+            .map_or(0, |focus| match focus {
+                Focus::X11(window) => window.window_id(),
+                _ => 0,
+            });
+        // Always drain, so a notice is never left to look new at the next call.
+        let written = reader.active_window_written();
+        if want != self.x_active || (written && reader.active_window() != want) {
+            reader.set_active_window(want);
+            self.x_active = want;
         }
     }
 
@@ -347,6 +438,7 @@ impl XwmHandler for State {
     fn disconnected(&mut self, _xwm: XwmId) {
         self.xwm = None;
         self.x_state = None;
+        self.x_active = 0;
         self.x_display = None;
     }
 }

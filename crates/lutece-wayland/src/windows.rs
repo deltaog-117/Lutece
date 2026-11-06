@@ -286,6 +286,24 @@ impl Windows {
         self.order = next;
     }
 
+    /// The managed X11 windows, bottom to top as they are drawn: a fullscreen window is
+    /// above the others, whatever its place in the order.
+    pub(crate) fn x11_in_order(&self) -> Vec<X11Surface> {
+        let x11 = |fullscreen: bool| {
+            self.order
+                .iter()
+                .filter_map(move |id| {
+                    let entry = self.managed.get(id)?;
+                    (entry.fullscreen == fullscreen).then_some(&entry.shell)
+                })
+                .filter_map(|shell| match shell {
+                    Shell::X11(window) => Some(window.clone()),
+                    Shell::Xdg(_) => None,
+                })
+        };
+        x11(false).chain(x11(true)).collect()
+    }
+
     /// The mapped X11 menus and tooltips, newest first. They are drawn above everything.
     pub(crate) fn menu_layers(&self) -> Vec<Layer> {
         self.override_redirect

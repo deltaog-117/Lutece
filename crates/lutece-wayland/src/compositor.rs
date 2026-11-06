@@ -103,6 +103,8 @@ pub(crate) struct State {
     pub(crate) xwm: Option<X11Wm>,
     /// Reads the window state Smithay leaves alone, once Xwayland is running.
     pub(crate) x_state: Option<StateReader>,
+    /// The X window last written to `_NET_ACTIVE_WINDOW`; 0 for none.
+    pub(crate) x_active: u32,
     /// The X11 display number programs use to reach Xwayland, once it is running.
     pub(crate) x_display: Option<u32>,
     /// Why Xwayland could not start, until the caller has been told.
@@ -167,6 +169,7 @@ impl State {
             xwayland_shell: XWaylandShellState::new::<Self>(display),
             xwm: None,
             x_state: None,
+            x_active: 0,
             x_display: None,
             xwayland_failure: None,
         })

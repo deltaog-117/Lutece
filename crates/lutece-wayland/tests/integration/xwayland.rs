@@ -536,6 +536,100 @@ fn the_window_the_core_focuses_gets_the_x11_input_focus() {
     assert_ne!(first, second);
 }
 
+impl Fixture {
+    /// A window-list property of the root (`_NET_ACTIVE_WINDOW`, `_NET_CLIENT_LIST_STACKING`).
+    fn root_windows(&self, name: &str) -> Vec<Window> {
+        let atom = self.intern(name);
+        self.x
+            .get_property(false, self.root, atom, AtomEnum::WINDOW, 0, 64)
+            .expect("get_property")
+            .reply()
+            .expect("a reply")
+            .value32()
+            .map(Iterator::collect)
+            .unwrap_or_default()
+    }
+
+    /// The window `_NET_ACTIVE_WINDOW` names; 0 when it names none.
+    fn active_window(&self) -> Window {
+        self.root_windows("_NET_ACTIVE_WINDOW")
+            .first()
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+#[test]
+fn the_active_window_hint_follows_the_focus_and_clears_when_a_wayland_window_has_it() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    let window = fixture.open((10, 10), (50, 50), "x11", "X11", false);
+    fixture.wait_for_events("the X11 window", |events| opened(events).len() == 1);
+    let x_id = opened(&fixture.seen)[0].0;
+    let mut client = fixture.wayland_client();
+    fixture.wait_for_events("both windows", |events| opened(events).len() == 2);
+    let wayland_id = opened(&fixture.seen)[1].0;
+
+    fixture.focus(x_id, &mut client);
+    fixture.wait_for("the hint to name the X11 window", |fixture| {
+        (fixture.active_window() == window).then_some(())
+    });
+
+    fixture.focus(wayland_id, &mut client);
+    fixture.wait_for("the hint to be cleared", |fixture| {
+        (fixture.active_window() == 0).then_some(())
+    });
+    // Smithay writes the hint when the X server reports the focus change, which can be
+    // after the first reading; the hint must stay cleared.
+    for _ in 0..20 {
+        fixture.pump(&mut client);
+        assert_eq!(fixture.active_window(), 0, "the old window came back");
+    }
+}
+
+#[test]
+fn the_x_stacking_order_follows_the_scene() {
+    let Some(mut fixture) = Fixture::start() else {
+        return;
+    };
+    let first = fixture.open((10, 10), (50, 50), "one", "One", false);
+    fixture.wait_for_events("the first window", |events| opened(events).len() == 1);
+    let second = fixture.open((20, 20), (50, 50), "two", "Two", false);
+    fixture.wait_for_events("the second window", |events| opened(events).len() == 2);
+    let ids = [opened(&fixture.seen)[0].0, opened(&fixture.seen)[1].0];
+    fixture.drive();
+    // Tiles do not overlap, so which is lower is the scene's business; X must agree.
+    let listed = fixture.wait_for("both windows to be listed", |fixture| {
+        let list = fixture.root_windows("_NET_CLIENT_LIST_STACKING");
+        (list.len() == 2).then_some(list)
+    });
+    let (bottom, top) = (listed[0], listed[1]);
+    let bottom_id = if bottom == first { ids[0] } else { ids[1] };
+    assert!([first, second].contains(&top) && top != bottom);
+
+    // A fullscreen window is drawn above everything, so it is above in X too.
+    fixture.waiting.push(Event::FocusRequested(bottom_id));
+    fixture.waiting.push(Event::FullscreenRequested {
+        id: bottom_id,
+        on: true,
+    });
+    fixture.drive();
+    fixture.wait_for("the fullscreen window on top", |fixture| {
+        (fixture.root_windows("_NET_CLIENT_LIST_STACKING") == [top, bottom]).then_some(())
+    });
+
+    // And back under, with the other one on top again, when it stops.
+    fixture.waiting.push(Event::FullscreenRequested {
+        id: bottom_id,
+        on: false,
+    });
+    fixture.drive();
+    fixture.wait_for("the order to return", |fixture| {
+        (fixture.root_windows("_NET_CLIENT_LIST_STACKING") == [bottom, top]).then_some(())
+    });
+}
+
 /// The atoms the selection tests talk in.
 struct Atoms {
     clipboard: u32,

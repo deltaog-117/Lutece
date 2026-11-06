@@ -417,6 +417,7 @@ impl WaylandBackend {
         self.display.dispatch_clients(&mut self.state)?;
         self.state.popups.cleanup();
         self.state.cleanup_layers();
+        self.state.sync_active_window();
         self.display.flush_clients()?;
         Ok(())
     }
