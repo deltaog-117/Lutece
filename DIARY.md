@@ -42,6 +42,10 @@
 | 2026-11-03 | Fullscreen | State in the scene (a set), reported by `diff`; only the focused window can be fullscreen | ✅ Confirmed |
 | 2026-11-03 | X11 bars | Dock windows tracked, not managed; struts worked out per monitor; EWMH advertised | ✅ Confirmed |
 | 2026-11-03 | Wayland layer-shell | Smithay's layer map; one front-to-back list of layers; keyboard for exclusive and clicked surfaces | ✅ Confirmed |
+| 2026-11-04 | Xwayland display numbers | The library never reuses a display number within a process | ✅ Confirmed |
+| 2026-11-04 | Fullscreen at start under Xwayland | A second connection to Xwayland reads `_NET_WM_STATE` at the map request | ✅ Confirmed |
+| 2026-11-04 | Override-redirect bars on X11 | Found at `MapNotify`; a bar is a window with a strut | ✅ Confirmed |
+| 2026-11-06 | X11 stacking and active window under Xwayland | Backend restacks from the scene and writes `_NET_ACTIVE_WINDOW` itself; on-demand start deferred | ✅ Confirmed |
 
 ---
 
@@ -1359,3 +1363,149 @@ Bars, launchers and wallpapers on Wayland are not windows: their client says whe
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-03 | Initial entry | deltaog-117 |
+
+---
+
+### Xwayland display numbers: the library never reuses one within a process
+
+**Date:** 2026-11-04
+**Status:** Confirmed
+
+#### Context / Background
+
+The Xwayland integration tests failed in about one run in eight at `Fixture::start` with `Connection refused`, and a run could lose two tests. Smithay picks the lowest free display number when no number is given, and the tests start many Xwayland instances in one process at once.
+
+#### Options Considered
+
+| COA | Approach | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|---|
+| A | Retry the start in the test fixture | Smallest change, no library edit | The clash stays and is hidden; slower on a flake | S |
+| B | The library never reuses a display number in a process | Removes the clash at its source; measured 0 failures in 100 runs | The number is no longer always the lowest; narrow cross-process case | M |
+| C | Serialise the tests and wait for Xwayland to exit | Library behaviour unchanged | Slower; relies on scanning `/proc`; the hazard stays | M |
+
+#### Decision & Rationale
+
+**Chosen Option:** B. It is the only option that removes the clash instead of tolerating it, and the fix sits in the one function that starts Xwayland.
+
+#### Implementation Notes
+
+- **What was seen when it failed:** the socket file and the lock file of the display were gone from `/tmp` while Xwayland was alive and listening on both of its sockets. The same display number was created and removed several times within a few milliseconds. Each instance cleans up its lock and socket file by path, so one instance can delete the files of another that took the number after it. Which deletion starts the chain was not traced: no tracing tool is installed here.
+- **The fix:** `Displays`, a process-wide counter, hands each start a candidate number and a start whose number is taken moves to the next. The first candidate is 0, so a lone Xwayland still gets the lowest free number. The counter wraps inside 256 numbers, so reuse becomes possible again only after that many starts in one process.
+- **How it was checked:** a throwaway version of the fix gave 0 failures in 100 runs of the Xwayland tests, against about 1 in 8 before; the real one gave 0 in 100 again.
+- **Not covered:** a new process that starts while the previous process's Xwayland is still dying can still meet the same number. That is far narrower than the in-process case and was not seen.
+- **Leftover files:** runs that end without dropping the lock leave `/tmp/.X<n>-lock` files. A later start treats them as stale and takes the number. They are harmless and were left alone, since the live session's own lock is among them.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-04 | Initial entry | deltaog-117 |
+
+---
+
+### Fullscreen at start under Xwayland: a second connection reads the state at the map request
+
+**Date:** 2026-11-04
+**Status:** Confirmed
+
+#### Context / Background
+
+A program that sets `_NET_WM_STATE` fullscreen before it maps was not seen asking, because Smithay's window manager treats that property as its own to write and never reads it (its source says so).
+
+#### Decision & Rationale
+
+**Chosen Option:** the backend opens its own connection to Xwayland once it is ready (`StateReader`) and reads the property when a window asks to be mapped. If the state includes fullscreen, the window is remembered, and `FullscreenRequested` is sent right after its `WindowOpened`, so the core knows the window when it is asked. Only this approach was credible: Smithay keeps its own connection private, and sharing its socket would interleave two protocols on one stream.
+
+#### Implementation Notes
+
+- **Blocking read:** the read waits for Xwayland's answer. That is not a new kind of wait; Smithay's own window manager already asks Xwayland about each window it maps, on the same thread.
+- **Dependency:** `x11rb` 0.14 moves from the dev-dependencies to the dependencies of `lutece-wayland`. It was already in the lockfile. Smithay's own re-export is 0.13 and sits behind a feature this crate does not use.
+- **Failure:** if the connection cannot be made, Xwayland is reported as failed through the same channel as a failed window manager start, instead of quietly losing the feature.
+- **Tests:** a window that sets the state before it maps covers the band a bar leaves, and the request arrives after the window opens; a plain window makes no request. With the read switched off the first test times out, so it tests the feature.
+- **Not verified:** a real video player started fullscreen has not been run.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-04 | Initial entry | deltaog-117 |
+
+---
+
+### Override-redirect bars on X11: found when they map, kept if they have a strut
+
+**Date:** 2026-11-04
+**Status:** Confirmed
+
+#### Context / Background
+
+A bar that opts out of management (override-redirect) is never redirected to the window manager, so it sends no map request and was not tracked. Bars such as `polybar` can be configured this way and still publish struts.
+
+#### Decision & Rationale
+
+**Chosen Option:** the backend already hears every window mapped under the root, so a `MapNotify` of an override-redirect window reads its struts and feeds the existing bar tracking. Only this approach was credible: guessing a reserve from an unmanaged window's position would take menus and tooltips at a screen edge for bars, and a caller that knows a fixed bar size can already send `Event::ReservedChanged` itself.
+
+#### Implementation Notes
+
+- **A bar is a window with a strut.** For an unmanaged window the type `_NET_WM_WINDOW_TYPE_DOCK` makes no difference, since it is never managed and a dock with no strut reserves nothing. `Strut::reserves` says whether any edge has depth.
+- **Menus and tooltips pass through the same path** and are dropped at once because they have no strut. The cost is two property reads for each such window that maps.
+- **Struts set after the window maps** are caught: the backend asks to be told of property changes on every unmanaged window it looks at, and a strut change on a window not yet kept re-checks it.
+- **Leaving:** unmapping or destroying the window uses the bar code that already existed. A window that was already showing at start is checked at start, as managed bars are.
+- **Limit that stays:** a bar that publishes no strut (plain `dzen`) still reserves nothing; there is nothing to read. The roadmap's earlier wording promised more than this can do.
+- **Tests:** five integration tests on a private `Xvfb` (reserves, no strut reserves nothing, strut set after mapping, already showing at start, closing gives the space back) and one unit test.
+- **Test pitfall, again:** targeted runs such as `cargo test -p lutece-x11 bars` used the example window manager from the day before, so the new tests failed on old code. Building the example first fixed it. `scripts/check` runs the whole workspace, which does rebuild it.
+- **Formatting pitfall:** the post-edit formatting hook sorts imports differently from `cargo fmt --check`, so the check failed on formatting alone until `cargo fmt --all` was run.
+- **Not verified:** a real `polybar` has not been run.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-04 | Initial entry | deltaog-117 |
+
+---
+
+### X11 stacking and the active window under Xwayland; Xwayland on demand deferred
+
+**Date:** 2026-11-06
+**Status:** Confirmed
+
+#### Context / Background
+
+Two roadmap items were taken together: EWMH stacking and active-window hints for X11 windows under Xwayland, and starting Xwayland only when the first X11 program connects. Smithay's window manager already writes `_NET_CLIENT_LIST`, and `_NET_WM_STATE_FOCUSED` through `set_activated`. Nothing kept `_NET_CLIENT_LIST_STACKING` in step with the scene, and `_NET_ACTIVE_WINDOW` was wrong.
+
+#### Options Considered
+
+On demand:
+
+| COA | Approach | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|---|
+| A | Bind the X sockets ourselves, start Xwayland on the first connection | Real on-demand | Copies Smithay's private lock and socket code and needs our own client data | H |
+| B | Start at the first spawn effect | Small; `DISPLAY` is known at spawn | A window manager's first spawn is nearly always a terminal, so it saves almost nothing | S |
+| C | Keep the eager start; leave the item open | No risk to the Xwayland tests | The item stays open | S |
+
+Stacking and active window:
+
+| COA | Approach | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|---|
+| A | Restack through Smithay after each scene change; write `_NET_ACTIVE_WINDOW` on the existing second connection | Smithay keeps the list properties; one extra writer | Must not fight Smithay over one property | M |
+| B | Fix only the active window | Smallest | Stacking list stays wrong | S |
+| C | Write every hint ourselves | One owner | Races with Smithay's writes | H |
+
+#### Decision & Rationale
+
+**Chosen Options:** on demand C, stacking and active window A. Real on-demand would mean maintaining a copy of Smithay's socket and lock handling, a risk to the Xwayland tests that had just reached 100 clean runs, for a memory saving nobody has asked for. Option A for the hints fixes both gaps and leaves the properties Smithay does well to Smithay.
+
+#### Implementation Notes
+
+- **Active window:** Smithay selects focus events on the root only, so the `FocusIn` and `FocusOut` it turns into `_NET_ACTIVE_WINDOW` carry the root or the window that lost the focus. My first guess, a stale old window after focus moved to a Wayland surface, was too narrow: the property never named the window that had the focus. The backend now writes the X window of the keyboard focus (0 for a Wayland surface) after each scene and each pump. It listens for property changes on the root and rereads the property only when told, so it settles although it hears its own writes.
+- **Stacking:** `update_stacking_order_downwards` takes the order from the top down; I first passed it bottom to top and the test caught that. The core keeps a fullscreen window's place in the scene order and only flags it, so there is no `Restack` for it: the order sent to X puts fullscreen windows last, and is redone when either a `Restack` or a fullscreen change arrives.
+- **Scene order is layout order for tiles:** the first test assumed the older window starts below. The scene's order for tiled windows is not map order, and since tiles do not overlap that is harmless; the test now reads the order X has and checks it changes as the scene says.
+- **Tests:** two integration tests with a real Xwayland (the hint follows the focus and clears for a Wayland window, and stays cleared over 20 pumps; stacking follows fullscreen on and off). Both failed before the change. The 14 Xwayland tests ran 15 times with no failure.
+- **Not verified:** a real pager, taskbar or `xprop -root` watching the properties.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-06 | Initial entry | deltaog-117 |

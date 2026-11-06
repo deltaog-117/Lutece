@@ -113,6 +113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland`: fullscreen. `xdg_toplevel` fullscreen and unfullscreen requests, also before the first commit, and X11 requests through Xwayland become `Event::FullscreenRequested`; the state is sent with the configure that sizes the window and is cleared when the window is hidden
 - Fullscreen keys in both examples (Super+Shift+f on X11, Alt+Shift+f on Wayland)
 - Integration tests: X11 bars and fullscreen on a private `Xvfb` (a bar leaves the tiles room, one that was showing before the window manager started, closing, resizing, two bars, a claim on most of the screen, a bar over one of two monitors, the request, the toggle, the key, a window that starts fullscreen, a new window ending it, state across a workspace switch); Wayland layer-shell and fullscreen with scripted clients and with a real Xwayland
+- X11 backend: a bar that is override-redirect (it maps without asking the window manager) is kept as a bar when it has a strut, also when it sets the strut after it maps or was showing at startup; menus and tooltips have none and are ignored
+- `lutece-wayland`: an X11 program that sets `_NET_WM_STATE` fullscreen before it maps is seen asking; the backend reads the property through its own connection to Xwayland and sends `FullscreenRequested` right after `WindowOpened`
+- `lutece-wayland`: the stacking order of X11 windows under Xwayland follows the scene (`_NET_CLIENT_LIST_STACKING`), a fullscreen window above the others; it is redone when the order or a fullscreen state changes
 
 ### Changed
 - `Engine::scene` lays out in the area bars leave free and puts a fullscreen window on the whole output; floating windows are centered in the free area
@@ -135,8 +138,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `lutece-wayland` example is now named `minimal_wayland` (it was `minimal`, like the X11 example, and building one overwrote the other's binary in `target/<profile>/examples`); run it with `cargo run -p lutece-wayland --example minimal_wayland`
 - `lutece-wayland` enables Smithay's `xwayland` feature and has `x11rb` as a test dependency
 - `lutece-wayland`: input handling moved out of `NestedBackend` into the `input` module; `linux-dmabuf` feedback is built from the renderer's own GPU; the compositor state keeps the event loop handle that selection transfers need; Smithay is built with the DRM, GBM, udev, libinput, libseat and multi-GPU features, ahead of a session backend
+- `lutece-wayland` gives each Xwayland instance a display number from a process-wide counter instead of Smithay's lowest free one (the first is still the lowest free); `x11rb` 0.14 moves from the dev-dependencies to the dependencies
 
 ### Fixed
+- `lutece-wayland`: `_NET_ACTIVE_WINDOW` under Xwayland named the root or the window that had just lost the focus; it now names the X11 window that has the keyboard focus, and none when a Wayland surface has it
 - The X11 integration tests failed at random (about half of the runs) with `Connection reset by peer`: the private `Xvfb` restarted when the readiness probe closed the only connection it had, and the test client's own connection landed in the restart. The server now starts with `-noreset`
 - The X11 integration tests started the Wayland example instead of the X11 one after both had been built, and then every test timed out waiting for the window manager
 - The X11 test helper that swaps two keys copied the first key's symbols over the second's, so the keyboard remap test could not find the key it had just remapped
+- The Xwayland integration tests failed in about 1 run in 8 with `Connection refused`: a display number released by one Xwayland instance was taken at once by the next, and the older instance deleted the lock and socket files of the newer one. No failure in 100 runs after the change

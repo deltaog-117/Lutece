@@ -55,6 +55,7 @@ Author: deltaog-117
 - ✅ Xwayland display numbers – `enable_xwayland` takes each instance's display number from a process-wide counter, so two instances of one process never share a number (the first still gets the lowest free one). The Xwayland tests, which failed in about 1 run in 8 with `Connection refused`, ran 100 times with no failure. A new process starting while the previous one's Xwayland is still dying is not covered
 - ✅ X11 programs that start fullscreen under Xwayland – the backend opens a second connection to Xwayland (`x11rb`, now a normal dependency of `lutece-wayland`) and reads `_NET_WM_STATE` when a window asks to map; a window that has set fullscreen gets `FullscreenRequested` right after `WindowOpened`
 - ✅ Override-redirect bars on X11 – a window that maps without asking the window manager is kept as a bar if it has a strut (`_NET_WM_STRUT_PARTIAL` or `_NET_WM_STRUT`), also when it sets the strut after it maps or was showing at startup; menus and tooltips have none and are dropped. A bar that publishes no strut (plain `dzen`) still reserves nothing
+- ✅ X11 stacking and active-window hints under Xwayland – the stacking order of the X11 windows (`_NET_CLIENT_LIST_STACKING`) follows the scene, with a fullscreen window above the others, and `_NET_ACTIVE_WINDOW` names the X11 window that has the keyboard focus and none when a Wayland window has it. Smithay hears focus changes only on the root window, so what it wrote there was the root or the window that had just lost the focus; the backend now writes it itself and puts it back if Smithay overwrites it. Tested with a real Xwayland; not seen with a real pager or taskbar
 
 ---
 
@@ -75,8 +76,7 @@ Needed before `lucarne` can be written on top of the library:
 ## 🟢 Low Priority (Nice‑to‑Have)
 
 - **Documentation site** – guide on writing a WM with the library.
-- **Stacking and active-window hints for X11 windows under Xwayland** – EWMH hints for the X side; X11 programs mostly work without them.
-- **Start Xwayland on demand** – today it starts with `enable_xwayland`; starting it when the first X11 program connects saves its memory when none is used.
+- **Start Xwayland on demand** – today it starts with `enable_xwayland`; starting it when the first X11 program connects saves its memory when none is used. Smithay's `XWayland::spawn` binds the sockets and starts Xwayland in one call, and its socket and lock code and client data are private, so it needs our own socket handling and spawn (copying that code), or a change in Smithay. Starting at the first spawn effect was rejected: it saves almost nothing. Left for when the memory matters.
 
 ---
 
