@@ -79,12 +79,16 @@ impl Engine {
                     self.styles.insert(id, style);
                 }
             }
+            Event::LayoutProvided { serial, placements } => {
+                self.provide_layout(serial, placements);
+            }
             Event::OutputsChanged(outputs) => {
                 let ids: Vec<_> = outputs.iter().map(|output| output.id).collect();
                 self.stacks.set_outputs(&ids);
                 self.outputs = outputs;
             }
         }
+        self.request_layouts(&mut effects);
         effects
     }
 
@@ -119,6 +123,7 @@ impl Engine {
             Action::SwapNext => self.stacks.swap_next(),
             Action::SwapPrev => self.stacks.swap_prev(),
             Action::NextLayout => self.stacks.next_layout(),
+            Action::ToggleExternalLayout => self.stacks.toggle_external_layout(),
             Action::GrowMaster => self.stacks.resize_master(MASTER_STEP),
             Action::ShrinkMaster => self.stacks.resize_master(-MASTER_STEP),
             // A tag nobody has (a binding written for another set of workspaces) is

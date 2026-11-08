@@ -4,6 +4,7 @@
 //! The scene is never stored. [`Engine::scene`] derives it from the current state, so it
 //! cannot drift from what the engine knows.
 
+mod external;
 mod handle;
 mod scene_builder;
 
@@ -55,6 +56,11 @@ pub struct Engine {
     /// The style each managed window was given; a window with none has the default.
     /// Kept only for managed windows, and only while it differs from the default.
     styles: HashMap<WinId, Style>,
+    /// The external layout of each workspace that has used it.
+    external: external::Slots,
+    /// The serial of the next layout request. Part of the state, so a replay numbers its
+    /// requests the same way.
+    next_serial: u64,
 }
 
 impl Engine {
@@ -69,6 +75,8 @@ impl Engine {
             outputs: Vec::new(),
             reserved: HashMap::new(),
             styles: HashMap::new(),
+            external: external::Slots::new(),
+            next_serial: 0,
         }
     }
 

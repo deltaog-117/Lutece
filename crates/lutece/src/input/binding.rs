@@ -27,6 +27,9 @@ pub enum Action {
     SwapPrev,
     /// Switch the current workspace to its next layout, wrapping around.
     NextLayout,
+    /// Switch the current workspace between the external layout (decided by a plugin) and
+    /// a tile layout.
+    ToggleExternalLayout,
     /// Widen the current workspace's master column. Does nothing in layouts without one.
     GrowMaster,
     /// Narrow the current workspace's master column. Does nothing in layouts without one.

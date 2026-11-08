@@ -1,6 +1,7 @@
 //! Things that happened, as reported by a backend.
 
 use crate::input::Action;
+use crate::shared::contracts::scene::Placement;
 use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
@@ -77,6 +78,17 @@ pub enum Event {
     /// The engine runs it as it runs a bound key, so the request is an event like any
     /// other and a recorded session replays it.
     ActionRequested(Action),
+    /// The answer to a [`Effect::LayoutRequested`](crate::Effect::LayoutRequested): where
+    /// each window goes, bottom to top. An answer is used only if it names the request
+    /// still outstanding for its workspace, lists exactly the windows asked about once
+    /// each, and keeps every rectangle inside the area; any other answer is ignored, and
+    /// the same request is not made again until the windows or the area change.
+    LayoutProvided {
+        /// The request being answered.
+        serial: u64,
+        /// The windows and their rectangles.
+        placements: Vec<Placement>,
+    },
 }
 
 /// Window details a layout or rule may need.

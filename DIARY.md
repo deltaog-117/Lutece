@@ -1568,3 +1568,20 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### External layout, and the nested window seen for the first time
+
+- **What:** `Layout::External`, `Effect::LayoutRequested { tag, area, windows, focus, serial }`, `Event::LayoutProvided { serial, placements }`, `Action::ToggleExternalLayout`, `Engine::pending_layout_requests`. Chosen over a plugin that pushes rectangles on its own: with request and reply a replay can reproduce what the screen showed, and the plugin cannot leave stale rectangles after the windows change.
+- **No timeout in the core:** the engine never waits. A workspace with the external layout is shown with the default layout until an answer fits its windows and area; the scene is derived from state as before. A late answer is still used if it still fits, a stale or wrong one is ignored. So the host needs no timer event, and a replayed session ends in the same state because answers are events. The earlier idea of a tick event was dropped.
+- **Answers are checked:** a serial that is not outstanding is ignored; the placements must name each requested window exactly once and keep every rectangle inside the area. A refused answer is remembered so the same question is not asked again in a loop; it is asked again when the windows or the area change.
+- **Requests are made once:** when the windows or area change, not on every event. A plugin that connects later (or restarts) would never be asked, so `pending_layout_requests` lists what is unanswered for a host to hand over on connect. Found by the first end-to-end test with a real plugin, which waited ten seconds for an answer that was never requested again.
+- **Not in the NextLayout cycle:** the external layout is entered and left with `ToggleExternalLayout`, because cycling onto it with no plugin would show the default layout twice in a row.
+- **Tests:** 12 new, among them: effects and state equal to the default layout before any answer, an answer used, an old serial ignored, a closing window making the answer stale, wrong and repeated answers refused without a loop, no request for empty or floating-only workspaces, a replayed session with answers equal to the live engine, and a property test that answers every request over random events and checks the scene is always buildable.
+- **Found by looking:** with `wm-host` running a layout plugin and a GTK bar, the nested window was shown upside down (bar at the bottom, mirrored text). The winit framebuffer has its origin at the bottom; the frame is now drawn with `Transform::Flipped180`. The cause is read from Smithay's winit examples, and the fix was confirmed by a second screenshot. No automated test covers it: it needs a host window.
+- **Not done:** the cursor and pointer input were not checked after the flip, since only windows and the bar were looked at; no screenshot was taken at a scale other than 1.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

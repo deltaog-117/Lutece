@@ -30,6 +30,11 @@ pub enum Layout {
     Grid,
     /// The first window in a middle column, the rest alternating to its right and left.
     CenteredMaster(MasterRatio),
+    /// A plugin of the window manager decides: the engine asks for the rectangles with
+    /// [`Effect::LayoutRequested`](crate::Effect::LayoutRequested) and uses the answer of
+    /// [`Event::LayoutProvided`](crate::Event::LayoutProvided). Until an answer fits the
+    /// windows, the workspace is laid out like [`Layout::default`].
+    External,
 }
 
 impl Default for Layout {
@@ -73,6 +78,9 @@ impl Layout {
             Self::Monocle => Ok(monocle::arrange(area, windows, focus)),
             Self::Grid => grid::arrange(area, windows),
             Self::CenteredMaster(ratio) => centered::arrange(ratio, area, windows),
+            // The engine places an external layout from its answer; asked directly, the
+            // fallback is the default layout.
+            Self::External => Self::default().arrange(area, windows, focus),
         }
     }
 }

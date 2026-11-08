@@ -2,8 +2,8 @@
 
 use lutece::{
     Action, Change, Curve, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap,
-    Keysym, Layout, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene,
-    SpawnCommand, StackSet, Style, Tag, Transition, WinId, WindowInfo, diff,
+    Keysym, Layout, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Placement, Rect,
+    Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -1315,4 +1315,257 @@ fn an_action_request_for_a_tag_nobody_has_changes_nothing() {
     engine.handle(Event::ActionRequested(Action::ViewTag(tag("nope"))));
 
     assert_eq!(engine, before);
+}
+
+fn external_engine() -> Engine {
+    let mut engine = engine();
+    engine.handle(screen(1000, 600));
+    engine.handle(Event::ActionRequested(Action::ToggleExternalLayout));
+    engine
+}
+
+fn requests(effects: &[Effect]) -> Vec<(u64, Vec<WinId>, Rect)> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::LayoutRequested {
+                serial,
+                windows,
+                area,
+                ..
+            } => Some((*serial, windows.clone(), *area)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn column_answer(serial: u64, windows: &[WinId], area: Rect) -> Event {
+    let width = area.width() / u32::try_from(windows.len()).expect("few windows");
+    let placements = windows
+        .iter()
+        .zip(0u32..)
+        .map(|(&id, n)| Placement {
+            id,
+            rect: Rect::new(
+                area.x() + i32::try_from(n * width).expect("small"),
+                area.y(),
+                width,
+                area.height(),
+            )
+            .expect("non-zero size"),
+        })
+        .collect();
+    Event::LayoutProvided { serial, placements }
+}
+
+#[test]
+fn an_external_workspace_asks_for_its_windows_and_shows_the_default_meanwhile() {
+    let mut engine = external_engine();
+
+    let first = requests(&engine.handle(open(1)));
+    let second = requests(&engine.handle(open(2)));
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].1, [w(1)]);
+    assert_eq!(second.len(), 1);
+    // The newest window is the master, so it comes first.
+    assert_eq!(second[0].1, [w(2), w(1)]);
+    assert_ne!(first[0].0, second[0].0);
+
+    let mut builtin = bound_engine();
+    replay(&mut builtin, [screen(1000, 600), open(1), open(2)]);
+    assert_eq!(scene(&engine), scene(&builtin));
+}
+
+#[test]
+fn an_answer_that_fits_is_used_and_not_asked_again() {
+    let mut engine = external_engine();
+    engine.handle(open(1));
+    let (serial, windows, area) = requests(&engine.handle(open(2))).remove(0);
+
+    let effects = engine.handle(column_answer(serial, &windows, area));
+
+    assert!(requests(&effects).is_empty());
+    let scene = scene(&engine);
+    assert_eq!(scene.get(w(2)).expect("shown").rect.x(), 0);
+    assert_eq!(scene.get(w(2)).expect("shown").rect.width(), 500);
+    assert_eq!(scene.get(w(1)).expect("shown").rect.x(), 500);
+    assert!(requests(&engine.handle(Event::FocusRequested(w(1)))).is_empty());
+}
+
+#[test]
+fn an_answer_to_an_old_request_is_ignored() {
+    let mut engine = external_engine();
+    let (old, windows, area) = requests(&engine.handle(open(1))).remove(0);
+    let (new, new_windows, new_area) = requests(&engine.handle(open(2))).remove(0);
+
+    engine.handle(column_answer(old, &windows, area));
+    let stale = scene(&engine);
+    assert_ne!(scene(&engine).get(w(1)).expect("shown").rect.width(), 1000);
+
+    engine.handle(column_answer(new, &new_windows, new_area));
+    assert_ne!(scene(&engine), stale);
+}
+
+#[test]
+fn a_closing_window_makes_the_answer_stale_and_asks_again() {
+    let mut engine = external_engine();
+    engine.handle(open(1));
+    let (serial, windows, area) = requests(&engine.handle(open(2))).remove(0);
+    engine.handle(column_answer(serial, &windows, area));
+
+    let again = requests(&engine.handle(Event::WindowClosed(w(2))));
+
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].1, [w(1)]);
+}
+
+#[test]
+fn a_wrong_answer_is_refused_and_the_same_question_is_not_repeated() {
+    let mut engine = external_engine();
+    engine.handle(open(1));
+    let (serial, windows, area) = requests(&engine.handle(open(2))).remove(0);
+    let outside = Rect::new(area.x() - 5, area.y(), area.width(), area.height()).expect("size");
+    let bad = [
+        Event::LayoutProvided {
+            serial,
+            placements: vec![Placement {
+                id: w(1),
+                rect: area,
+            }],
+        },
+        Event::LayoutProvided {
+            serial,
+            placements: windows
+                .iter()
+                .map(|&id| Placement { id, rect: outside })
+                .collect(),
+        },
+    ];
+    for answer in bad {
+        // The first answer consumes the request; ask again to test the second.
+        let mut engine = engine.clone();
+        let effects = engine.handle(answer);
+        assert!(requests(&effects).is_empty());
+        assert!(requests(&engine.handle(Event::FocusRequested(w(1)))).is_empty());
+        let mut builtin = bound_engine();
+        replay(&mut builtin, [screen(1000, 600), open(1), open(2)]);
+        // The focus request above moved the focus; the places are what is compared.
+        assert_eq!(scene(&engine).placements(), scene(&builtin).placements());
+    }
+}
+
+#[test]
+fn a_repeated_window_in_an_answer_is_refused() {
+    let mut engine = external_engine();
+    engine.handle(open(1));
+    let (serial, _, area) = requests(&engine.handle(open(2))).remove(0);
+
+    engine.handle(Event::LayoutProvided {
+        serial,
+        placements: vec![
+            Placement {
+                id: w(1),
+                rect: area,
+            },
+            Placement {
+                id: w(1),
+                rect: area,
+            },
+        ],
+    });
+
+    let mut builtin = bound_engine();
+    replay(&mut builtin, [screen(1000, 600), open(1), open(2)]);
+    assert_eq!(scene(&engine), scene(&builtin));
+}
+
+#[test]
+fn nothing_is_asked_for_an_empty_workspace_or_floating_windows() {
+    let mut engine = external_engine();
+    assert!(requests(&engine.handle(Event::ActionRequested(Action::FocusNext))).is_empty());
+
+    engine.handle(open(1));
+    let effects = engine.handle(Event::ActionRequested(Action::ToggleFloat));
+    assert!(requests(&effects).is_empty());
+}
+
+#[test]
+fn leaving_the_external_layout_stops_the_requests_and_uses_the_tile_layout() {
+    let mut engine = external_engine();
+    engine.handle(open(1));
+    let (serial, windows, area) = requests(&engine.handle(open(2))).remove(0);
+    engine.handle(column_answer(serial, &windows, area));
+
+    let effects = engine.handle(Event::ActionRequested(Action::ToggleExternalLayout));
+    assert!(requests(&effects).is_empty());
+
+    let mut builtin = bound_engine();
+    replay(&mut builtin, [screen(1000, 600), open(1), open(2)]);
+    assert_eq!(scene(&engine), scene(&builtin));
+}
+
+#[test]
+fn a_replayed_session_with_a_plugin_ends_in_the_same_state() {
+    let mut live = external_engine();
+    let mut log = vec![
+        screen(1000, 600),
+        Event::ActionRequested(Action::ToggleExternalLayout),
+    ];
+    for event in [open(1), open(2), open(3)] {
+        log.push(event.clone());
+        for (serial, windows, area) in requests(&live.handle(event)) {
+            let answer = column_answer(serial, &windows, area);
+            log.push(answer.clone());
+            live.handle(answer);
+        }
+    }
+
+    let mut rebuilt = engine();
+    replay(&mut rebuilt, log);
+
+    assert_eq!(rebuilt, live);
+    assert_eq!(scene(&rebuilt), scene(&live));
+}
+
+proptest! {
+    #[test]
+    fn answering_every_request_never_breaks_the_scene(
+        steps in proptest::collection::vec((0u8..6, 1u64..5), 0..40)
+    ) {
+        let mut engine = external_engine();
+        for (kind, raw) in steps {
+            let event = match kind {
+                0 | 1 => open(raw),
+                2 => Event::WindowClosed(w(raw)),
+                3 => Event::ActionRequested(Action::ToggleExternalLayout),
+                4 => Event::ActionRequested(Action::ViewTag(tag(&raw.to_string()))),
+                _ => Event::ActionRequested(Action::ToggleFloat),
+            };
+            let mut effects = engine.handle(event);
+            while let Some((serial, windows, area)) = requests(&effects).into_iter().next() {
+                effects = engine.handle(column_answer(serial, &windows, area));
+            }
+            prop_assert!(engine.scene().is_ok());
+        }
+    }
+}
+
+#[test]
+fn the_unanswered_requests_can_be_asked_for_again() {
+    let mut engine = external_engine();
+    engine.handle(open(1));
+    let (old, _, _) = requests(&engine.handle(open(2))).remove(0);
+    assert_eq!(
+        requests(&engine.pending_layout_requests())
+            .iter()
+            .map(|(serial, windows, _)| (*serial, windows.clone()))
+            .collect::<Vec<_>>(),
+        [(old, vec![w(2), w(1)])]
+    );
+
+    let (serial, windows, area) = requests(&engine.pending_layout_requests()).remove(0);
+    engine.handle(column_answer(serial, &windows, area));
+
+    assert!(engine.pending_layout_requests().is_empty());
 }

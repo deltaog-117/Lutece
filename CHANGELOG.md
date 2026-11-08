@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- External layout: `Layout::External`, `Effect::LayoutRequested`, `Event::LayoutProvided`, `Action::ToggleExternalLayout` and `Engine::pending_layout_requests`. A workspace with it asks for the rectangles of its tiled windows and shows the default layout until an answer that names each window once and stays inside the area arrives; a stale, wrong or missing answer costs only the look of that workspace, and the engine never waits.
 - `Event::ActionRequested(Action)`: the engine runs an action asked for by something other than a key (a control tool or a plugin) exactly as it runs a bound key, so the request is an event and a recorded session replays it.
 - `Style` (corner radius, border, opacity, `Transition` with a `Curve` and a duration in milliseconds), `Scene::with_style` and `Scene::style_of`, `Change::Style` and `Event::StyleChanged`; the diff announces a style change before the move it animates, and `Error::StyleWindowMissing` rejects a style for a window the scene does not show
 - Cargo workspace with three crates: `lutece` (core), `lutece-x11` and `lutece-wayland`
@@ -143,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland` gives each Xwayland instance a display number from a process-wide counter instead of Smithay's lowest free one (the first is still the lowest free); `x11rb` 0.14 moves from the dev-dependencies to the dependencies
 
 ### Fixed
+- The nested Wayland window drew everything upside down (found the first time it was looked at, with a bar and three terminals in it): the winit framebuffer has its origin at the bottom, so the frame is now drawn with `Transform::Flipped180`.
 - `lutece-wayland`: `_NET_ACTIVE_WINDOW` under Xwayland named the root or the window that had just lost the focus; it now names the X11 window that has the keyboard focus, and none when a Wayland surface has it
 - The X11 integration tests failed at random (about half of the runs) with `Connection reset by peer`: the private `Xvfb` restarted when the readiness probe closed the only connection it had, and the test client's own connection landed in the restart. The server now starts with `-noreset`
 - The X11 integration tests started the Wayland example instead of the X11 one after both had been built, and then every test timed out waiting for the window manager

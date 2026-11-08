@@ -158,7 +158,7 @@ impl Workspace {
     pub(crate) fn empty(tag: Tag, layout: Layout, rank: usize) -> Self {
         let tile_ratio = match layout {
             Layout::Tile(ratio) | Layout::CenteredMaster(ratio) => ratio,
-            Layout::Monocle | Layout::Grid => MasterRatio::default(),
+            Layout::Monocle | Layout::Grid | Layout::External => MasterRatio::default(),
         };
         Self {
             tag,
@@ -252,6 +252,21 @@ impl Workspace {
                 self.tile_ratio = ratio;
                 Layout::Tile(ratio)
             }
+            // The cycle covers the built-in layouts; an external one is entered and left
+            // with `toggle_external`.
+            Layout::External => Layout::Tile(self.tile_ratio),
+        };
+    }
+
+    /// Switches between the external layout and a tile layout.
+    pub(crate) fn toggle_external(&mut self) {
+        self.layout = match self.layout {
+            Layout::External => Layout::Tile(self.tile_ratio),
+            Layout::Tile(ratio) | Layout::CenteredMaster(ratio) => {
+                self.tile_ratio = ratio;
+                Layout::External
+            }
+            Layout::Monocle | Layout::Grid => Layout::External,
         };
     }
 
@@ -263,7 +278,7 @@ impl Workspace {
             Layout::CenteredMaster(ratio) => {
                 self.layout = Layout::CenteredMaster(ratio.step(delta));
             }
-            Layout::Monocle | Layout::Grid => {}
+            Layout::Monocle | Layout::Grid | Layout::External => {}
         }
     }
 

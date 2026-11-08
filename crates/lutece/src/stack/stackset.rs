@@ -305,6 +305,11 @@ impl StackSet {
         self.current.workspace.next_layout();
     }
 
+    /// Switches the current workspace between the external layout and a tile layout.
+    pub fn toggle_external_layout(&mut self) {
+        self.current.workspace.toggle_external();
+    }
+
     /// Moves the current workspace's master ratio by `delta` thousandths, if its layout
     /// has a master column.
     pub fn resize_master(&mut self, delta: i16) {

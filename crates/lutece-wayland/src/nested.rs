@@ -201,8 +201,10 @@ impl NestedBackend {
             let (renderer, mut framebuffer) = self.graphics.bind().map_err(render_error)?;
             let mut elements = self.wayland.cursor_elements(renderer);
             elements.extend(self.wayland.surface_elements(renderer));
+            // The winit framebuffer has its origin at the bottom: drawn as is, the whole
+            // picture comes out upside down (seen when the nested window was first looked at).
             let mut frame = renderer
-                .render(&mut framebuffer, size, Transform::Normal)
+                .render(&mut framebuffer, size, Transform::Flipped180)
                 .map_err(render_error)?;
             frame.clear(BACKGROUND, &whole).map_err(render_error)?;
             draw_render_elements::<GlesRenderer, _, _>(

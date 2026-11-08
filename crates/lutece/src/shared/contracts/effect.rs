@@ -4,7 +4,8 @@
 //! [`Scene`](super::scene::Scene), so a backend only reconciles what changed.
 
 use crate::shared::error::{Error, Result};
-use crate::shared::ids::WinId;
+use crate::shared::geometry::Rect;
+use crate::shared::ids::{Tag, WinId};
 
 /// An action for the backend to carry out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,22 @@ pub enum Effect {
     Release(WinId),
     /// Stop the window manager.
     Quit,
+    /// Ask whatever provides the external layout where `windows` go on the workspace
+    /// `tag`, which shows `area`. The answer is [`Event::LayoutProvided`](crate::Event::LayoutProvided)
+    /// carrying the same `serial`; until it comes the workspace uses the default layout,
+    /// and a request that is no longer current is not answered.
+    LayoutRequested {
+        /// The workspace.
+        tag: Tag,
+        /// The area the windows must fill, with bars left out.
+        area: Rect,
+        /// The tiled windows in reading order, master first.
+        windows: Vec<WinId>,
+        /// The focused window of the workspace, if any.
+        focus: Option<WinId>,
+        /// Names this request in the answer.
+        serial: u64,
+    },
 }
 
 /// A program and its arguments. The program name is never empty.
