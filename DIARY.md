@@ -1642,3 +1642,17 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### 2026-11-08 – X11 events and what a host needs from the X11 backend
+
+- **Scope:** the X11 half of the richer events, and three additions the window manager host asked for. No COA: one credible approach each.
+- **Events:** managed windows now subscribe to property changes. The backend keeps the last description it sent per window and reports only a real change; it reads the properties when it handles the event, so changes made before it looks merge into one report. Pointer entry is `PointerEntered`, as on Wayland.
+- **Host needs:** `next_events_timeout` polls the connection with `rustix` (already in the tree through x11rb, now a direct dependency); `connect_to` takes a display name so tests run the backend in-process; `set_grabs` replaces the grab set, because `grab_keys` only adds and a reload or key mode would leave stale keys grabbed.
+- **Tests:** unit tests for the description bookkeeping and the atoms; in-process tests on Xvfb for title changes, pointer entry, the timeout and `set_grabs`. `scripts/check` passes with `LUTECE_REQUIRE_X11=1`.
+- **Not done:** nothing was looked at on a real X session; style is still ignored on X11.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

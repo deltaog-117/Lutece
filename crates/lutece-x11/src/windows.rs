@@ -4,6 +4,7 @@
 //! them apart needs this bookkeeping, and both [`translate`](crate::translate) and
 //! [`apply`](crate::apply) read and write it.
 
+use lutece::WindowInfo;
 use std::collections::{HashMap, HashSet};
 use x11rb::protocol::xproto::Window;
 
@@ -16,6 +17,9 @@ pub(crate) struct Windows {
     expected_unmaps: HashMap<Window, u32>,
     /// The windows whose `_NET_WM_STATE` says fullscreen because we put it there.
     fullscreen: HashSet<Window>,
+    /// What the core was last told about each window's title and class, so a property change
+    /// that leaves them as they were is not reported.
+    infos: HashMap<Window, WindowInfo>,
 }
 
 impl Windows {
@@ -34,6 +38,7 @@ impl Windows {
         self.mapped.remove(&window);
         self.expected_unmaps.remove(&window);
         self.fullscreen.remove(&window);
+        self.infos.remove(&window);
         self.managed.remove(&window)
     }
 
@@ -45,6 +50,12 @@ impl Windows {
         } else {
             self.fullscreen.remove(&window)
         }
+    }
+
+    /// Records what the core now knows about `window`. `true` if that differs from what it
+    /// knew before, which is when a change is worth reporting.
+    pub(crate) fn note_info(&mut self, window: Window, info: WindowInfo) -> bool {
+        self.infos.insert(window, info.clone()).as_ref() != Some(&info)
     }
 
     pub(crate) fn is_fullscreen(&self, window: Window) -> bool {
@@ -103,6 +114,32 @@ mod tests {
         windows.forget(7);
         assert!(!windows.is_fullscreen(7));
         assert!(!windows.set_fullscreen(7, false));
+    }
+
+    fn titled(title: &str) -> WindowInfo {
+        WindowInfo {
+            title: title.to_owned(),
+            ..WindowInfo::default()
+        }
+    }
+
+    #[test]
+    fn a_description_is_news_only_when_it_differs_from_the_last() {
+        let mut windows = Windows::default();
+        windows.manage(7);
+        assert!(windows.note_info(7, titled("a")));
+        assert!(!windows.note_info(7, titled("a")));
+        assert!(windows.note_info(7, titled("b")));
+        assert!(windows.note_info(7, titled("a")));
+    }
+
+    #[test]
+    fn a_forgotten_window_starts_without_a_description() {
+        let mut windows = Windows::default();
+        windows.manage(7);
+        windows.note_info(7, titled("a"));
+        windows.forget(7);
+        assert!(windows.note_info(7, titled("a")));
     }
 
     #[test]

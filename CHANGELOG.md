@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- X11 backend: title, class and parent changes of a managed window are reported as `Event::WindowInfoChanged` (once per real change), and the pointer entering a window as `Event::PointerEntered` instead of `FocusRequested`.
+- `X11Backend::next_events_timeout` (wait for events with a limit, so a host can serve a socket between them), `X11Backend::connect_to` (a named display) and `X11Backend::set_grabs` (exactly these keys are grabbed; `grab_keys` only adds). New direct dependency: `rustix` with `event`.
 - Properties: `Event::PropertySet { target, key, value }` with `PropertyTarget` (a window or a workspace), `PropertyKey`, `PropertyValue` and the limits `MAX_NAME_BYTES`, `MAX_PROPERTY_VALUE_BYTES` and `MAX_PROPERTIES_PER_TARGET`. The engine keeps the properties as plain data, ignores a target it does not have and a new key past the limit, drops a window's properties when it closes, and gives them back with `Engine::properties` and `Engine::properties_of`.
 - Custom commands: `CommandName`, `Action::Custom` and `Effect::CommandInvoked`. Running the action asks for the command and changes nothing else.
 - `Event::PointerEntered(WinId)` and `Event::WindowInfoChanged { id, info }`; the Wayland backend reports both. A toplevel that sets its title or app id again to what it already is reports nothing.

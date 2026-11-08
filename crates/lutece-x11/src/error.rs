@@ -47,6 +47,9 @@ pub enum Error {
     /// with this modifier.
     #[error("the drag buttons with modifier {0:?} are already grabbed by another client")]
     DragAlreadyGrabbed(Modifiers),
+    /// Waiting for the X connection to have something to read failed.
+    #[error("cannot wait for the X server: {0}")]
+    Wait(#[source] io::Error),
     /// The core rejected a value built from what the X server reported.
     #[error(transparent)]
     Core(#[from] lutece::Error),

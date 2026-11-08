@@ -6,18 +6,22 @@ use crate::drag::Drags;
 use crate::error::{Error, Result};
 use crate::grabs::{Keyboard, grab_drag_buttons, grab_keys, regrab_keys, release_drag_buttons};
 use crate::outputs;
-use crate::translate::{existing, fullscreen_request, key_press, translate};
+use crate::translate::{
+    changes_description, existing, fullscreen_request, key_press, translate, win_id,
+};
 use crate::windows::Windows;
 use lutece::{Effect, Event, KeyPress, Modifiers, Scene, WindowInfo, diff};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use std::mem;
 use std::os::fd::{AsFd, BorrowedFd};
+use std::time::Duration;
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt, CreateWindowAux,
-    EventMask, MapState, Mapping, PropMode, Window, WindowClass,
+    EventMask, Grab, MapState, Mapping, ModMask, PropMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -83,7 +87,17 @@ impl X11Backend {
     /// Returns [`Error::AnotherWindowManager`] if one is already running, or an error
     /// if the display cannot be reached.
     pub fn connect() -> Result<Self> {
-        let (conn, screen_num) = RustConnection::connect(None)?;
+        Self::connect_to(None)
+    }
+
+    /// Like [`connect`](Self::connect), to the display named `display` (such as `":1"`),
+    /// or to the one `DISPLAY` names if it is `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`connect`](Self::connect).
+    pub fn connect_to(display: Option<&str>) -> Result<Self> {
+        let (conn, screen_num) = RustConnection::connect(display)?;
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
         let atoms = Atoms::new(&conn)?.reply()?;
@@ -141,6 +155,35 @@ impl X11Backend {
         self.pending_events()
     }
 
+    /// Waits up to `timeout` for events, and returns all that are ready: an empty list means
+    /// nothing came. Use it when the loop has other work between X events, such as a socket
+    /// to look at.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection to the X server breaks, or the wait itself fails.
+    pub fn next_events_timeout(&mut self, timeout: Duration) -> Result<Vec<Event>> {
+        // Asked first: x11rb may already hold events it read while waiting for a reply, and
+        // the descriptor would not say so.
+        let ready = self.pending_events()?;
+        if !ready.is_empty() {
+            return Ok(ready);
+        }
+        let descriptor = self.as_fd();
+        let mut fds = [PollFd::new(&descriptor, PollFlags::IN)];
+        let limit = Timespec {
+            tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(timeout.subsec_nanos()),
+        };
+        match poll(&mut fds, Some(&limit)) {
+            Ok(_) => {}
+            // A signal ended the wait early; the caller's loop comes back anyway.
+            Err(rustix::io::Errno::INTR) => {}
+            Err(errno) => return Err(Error::Wait(errno.into())),
+        }
+        self.pending_events()
+    }
+
     /// Returns the events that are ready now, without waiting. The list may be empty.
     ///
     /// # Errors
@@ -180,6 +223,30 @@ impl X11Backend {
                 self.grabbed.push(press);
             }
         }
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// Makes `presses` exactly the keys that are grabbed: any other key grabbed before is
+    /// let go, so its presses reach the focused window again. Use it when the keys the core
+    /// wants change, after a reload of a configuration or a switch of key mode;
+    /// [`grab_keys`](Self::grab_keys) only adds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`grab_keys`](Self::grab_keys). The keys that could be grabbed
+    /// stay grabbed, and the rest of `presses` is remembered for the next keyboard remap.
+    pub fn set_grabs(&mut self, presses: impl IntoIterator<Item = KeyPress>) -> Result<()> {
+        let mut wanted: Vec<KeyPress> = Vec::new();
+        for press in presses {
+            if !wanted.contains(&press) {
+                wanted.push(press);
+            }
+        }
+        // Every key grab on the root is ours, so dropping all of them drops only ours.
+        self.conn.ungrab_key(Grab::ANY, self.root, ModMask::ANY)?;
+        self.grabbed = wanted.clone();
+        grab_keys(&self.conn, &self.keyboard, self.root, wanted)?;
         self.conn.flush()?;
         Ok(())
     }
@@ -343,6 +410,18 @@ impl X11Backend {
                 };
                 if changed {
                     queued.extend(reserve.changes(screen_size(conn, *root)?));
+                }
+            } else if windows.is_managed(change.window)
+                && changes_description(atoms._NET_WM_NAME, change.atom)
+            {
+                // The window can be gone by now; its destruction arrives as an event.
+                if let Ok(info) = describe(conn, atoms, change.window)
+                    && windows.note_info(change.window, info.clone())
+                {
+                    queued.push(Event::WindowInfoChanged {
+                        id: win_id(change.window),
+                        info,
+                    });
                 }
             }
             return Ok(());
@@ -564,13 +643,14 @@ fn advertise(conn: &RustConnection, atoms: &Atoms, root: Window) -> Result<()> {
     Ok(())
 }
 
-/// Subscribes to a new window's pointer events and describes it.
+/// Subscribes to a new window's pointer and property events and describes it.
 fn adopt(conn: &RustConnection, atoms: &Atoms, window: Window) -> WindowInfo {
     // The window can be destroyed while we ask; its destruction then arrives as an event,
     // so an empty description and a missed subscription are harmless.
     let _ = conn.change_window_attributes(
         window,
-        &ChangeWindowAttributesAux::new().event_mask(EventMask::ENTER_WINDOW),
+        &ChangeWindowAttributesAux::new()
+            .event_mask(EventMask::ENTER_WINDOW | EventMask::PROPERTY_CHANGE),
     );
     describe(conn, atoms, window).unwrap_or_default()
 }

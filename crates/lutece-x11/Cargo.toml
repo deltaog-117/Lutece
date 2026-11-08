@@ -12,6 +12,9 @@ workspace = true
 lutece = { path = "../lutece" }
 thiserror = "2"
 x11rb = { version = "0.14", features = ["randr"] }
+# Waiting on the X connection with a timeout, so a host that also serves a socket can look
+# at it between X events. x11rb already depends on it.
+rustix = { version = "1", features = ["event"] }
 
 [dev-dependencies]
 proptest = "1"

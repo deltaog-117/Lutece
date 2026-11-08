@@ -7,6 +7,7 @@
 
 mod bars;
 mod drags;
+mod events;
 mod fullscreen;
 mod keys;
 mod monitors;

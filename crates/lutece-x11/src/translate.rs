@@ -5,7 +5,7 @@ use crate::windows::Windows;
 use lutece::{Event, KeyPress, WinId, WindowInfo};
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
-    Atom, ClientMessageEvent, KeyPressEvent, MapState, NotifyDetail, NotifyMode, Window,
+    Atom, AtomEnum, ClientMessageEvent, KeyPressEvent, MapState, NotifyDetail, NotifyMode, Window,
 };
 
 pub(crate) fn win_id(window: Window) -> WinId {
@@ -23,12 +23,14 @@ pub(crate) fn translate(
     adopt: impl FnOnce(Window) -> WindowInfo,
 ) -> Option<Event> {
     match event {
-        XEvent::MapRequest(request) => {
-            windows.manage(request.window).then(|| Event::WindowOpened {
+        XEvent::MapRequest(request) => windows.manage(request.window).then(|| {
+            let info = adopt(request.window);
+            windows.note_info(request.window, info.clone());
+            Event::WindowOpened {
                 id: win_id(request.window),
-                info: adopt(request.window),
-            })
-        }
+                info,
+            }
+        }),
         XEvent::UnmapNotify(unmap) => {
             if windows.take_expected_unmap(unmap.window) {
                 // We hid it ourselves; the core already knows.
@@ -47,10 +49,22 @@ pub(crate) fn translate(
             let arrived =
                 enter.mode == NotifyMode::NORMAL && enter.detail != NotifyDetail::INFERIOR;
             (arrived && windows.is_managed(enter.event))
-                .then(|| Event::FocusRequested(win_id(enter.event)))
+                .then(|| Event::PointerEntered(win_id(enter.event)))
         }
         _ => None,
     }
+}
+
+/// Whether a change of the property `atom` can change a window's title, class or parent
+/// window, which is all [`WindowInfo`] holds.
+pub(crate) fn changes_description(net_wm_name: Atom, atom: Atom) -> bool {
+    [
+        net_wm_name,
+        AtomEnum::WM_NAME.into(),
+        AtomEnum::WM_CLASS.into(),
+        AtomEnum::WM_TRANSIENT_FOR.into(),
+    ]
+    .contains(&atom)
 }
 
 /// `_NET_WM_STATE` action: take the listed states away.
@@ -108,9 +122,11 @@ pub(crate) fn existing(
         return None;
     }
     windows.mark_mapped(window);
+    let info = adopt(window);
+    windows.note_info(window, info.clone());
     Some(Event::WindowOpened {
         id: win_id(window),
-        info: adopt(window),
+        info,
     })
 }
 
@@ -306,14 +322,34 @@ mod tests {
     }
 
     #[test]
-    fn the_pointer_focuses_only_managed_windows_it_really_entered() {
+    fn only_the_properties_a_description_holds_count_as_changing_it() {
+        let net_wm_name: Atom = 400;
+        for atom in [
+            net_wm_name,
+            AtomEnum::WM_NAME.into(),
+            AtomEnum::WM_CLASS.into(),
+            AtomEnum::WM_TRANSIENT_FOR.into(),
+        ] {
+            assert!(changes_description(net_wm_name, atom));
+        }
+        for atom in [
+            AtomEnum::WM_HINTS.into(),
+            AtomEnum::WM_ICON_NAME.into(),
+            401,
+        ] {
+            assert!(!changes_description(net_wm_name, atom));
+        }
+    }
+
+    #[test]
+    fn the_pointer_is_reported_only_for_managed_windows_it_really_entered() {
         let mut windows = Windows::default();
         run(&mut windows, &map_request(5));
 
         let normal = enter(5, NotifyMode::NORMAL, NotifyDetail::ANCESTOR);
         assert_eq!(
             run(&mut windows, &normal),
-            Some(Event::FocusRequested(WinId::new(5)))
+            Some(Event::PointerEntered(WinId::new(5)))
         );
         let inferior = enter(5, NotifyMode::NORMAL, NotifyDetail::INFERIOR);
         assert_eq!(run(&mut windows, &inferior), None);

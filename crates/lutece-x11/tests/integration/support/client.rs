@@ -208,6 +208,22 @@ impl Client {
         window
     }
 
+    /// Sets the window's title the modern way, as a toolkit does when the text changes.
+    pub fn set_title(&self, window: Window, title: &str) {
+        let atom = self.atom("_NET_WM_NAME");
+        let utf8 = self.atom("UTF8_STRING");
+        self.conn
+            .change_property8(PropMode::REPLACE, window, atom, utf8, title.as_bytes())
+            .expect("set _NET_WM_NAME");
+        self.round_trip();
+    }
+
+    /// Puts the pointer at `at`, like a mouse would.
+    pub fn move_pointer(&self, at: (i16, i16)) {
+        self.fake_motion(at);
+        self.round_trip();
+    }
+
     /// Changes what a bar reserves, as a panel does when it resizes.
     pub fn set_strut(&self, window: Window, strut: [u32; 12]) {
         self.conn
