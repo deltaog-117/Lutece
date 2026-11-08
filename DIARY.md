@@ -1554,3 +1554,17 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### Action requests in the core
+
+- **What:** `Event::ActionRequested(Action)`. The engine handles it by calling the same private `run` a bound key reaches, so a request and the key give the same effects and the same state.
+- **Why:** actions could only be reached through the keymap, so a control tool or plugin of `window-manager` could not drive the engine, and anything that did would not be an event a replay could repeat. Chosen over hidden key bindings (the replay would depend on a table nobody sees).
+- **Order of dependencies:** `shared::contracts::event` now imports `input::Action`, while `input` already imports contract types. Rust allows it and the action list is small, so it stays; if it grows it moves to `shared::contracts`.
+- **Tests:** a request gives the same effects and the same engine as the bound key; it works with no binding; `Quit` and `Close` give their effects; a tag nobody has changes nothing.
+- **Not done:** no property test generates `ActionRequested` in the engine event-stream test, only the four cases above.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

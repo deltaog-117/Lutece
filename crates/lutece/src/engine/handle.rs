@@ -26,6 +26,7 @@ impl Engine {
     /// reported with `ReservedChanged` shrinks the area the other windows share.
     /// A style change gives a managed window its look and animation.
     /// A drag of a floating window moves and resizes it, as the move and resize keys do.
+    /// An action request runs that action, as a bound key would.
     /// A key press runs the action bound to it in the engine's keymap, and a press with
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
     /// focused window and spawning a program.
@@ -60,6 +61,7 @@ impl Engine {
                     self.run(action, &mut effects);
                 }
             }
+            Event::ActionRequested(action) => self.run(action, &mut effects),
             Event::FullscreenRequested { id, on } => self.stacks.set_fullscreen(id, on),
             Event::ReservedChanged { output, insets } => {
                 if insets.is_none() {

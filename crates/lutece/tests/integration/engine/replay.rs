@@ -1265,3 +1265,54 @@ fn a_hidden_window_keeps_its_style_for_when_it_returns() {
     engine.handle(pressed('2', Modifiers::SUPER));
     assert_eq!(scene(&engine).style_of(w(1)), style);
 }
+
+#[test]
+fn an_action_request_does_what_the_bound_key_does() {
+    let setup = [screen(1000, 600), open(1), open(2)];
+    let mut by_key = bound_engine();
+    let mut by_request = bound_engine();
+    replay(&mut by_key, setup.clone());
+    replay(&mut by_request, setup);
+
+    let from_key = by_key.handle(pressed('2', Modifiers::SUPER | Modifiers::SHIFT));
+    let from_request = by_request.handle(Event::ActionRequested(Action::MoveToTag(tag("2"))));
+
+    assert_eq!(from_request, from_key);
+    assert_eq!(by_request, by_key);
+}
+
+#[test]
+fn an_action_request_needs_no_binding() {
+    let mut engine = engine();
+    replay(&mut engine, [screen(1000, 600), open(1), open(2)]);
+
+    engine.handle(Event::ActionRequested(Action::ViewTag(tag("2"))));
+
+    assert_eq!(engine.stacks().current().tag().as_str(), "2");
+}
+
+#[test]
+fn an_action_request_can_ask_for_effects() {
+    let mut engine = engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+
+    assert_eq!(
+        engine.handle(Event::ActionRequested(Action::Quit)),
+        [Effect::Quit]
+    );
+    assert_eq!(
+        engine.handle(Event::ActionRequested(Action::Close)),
+        [Effect::Close(w(1))]
+    );
+}
+
+#[test]
+fn an_action_request_for_a_tag_nobody_has_changes_nothing() {
+    let mut engine = engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    let before = engine.clone();
+
+    engine.handle(Event::ActionRequested(Action::ViewTag(tag("nope"))));
+
+    assert_eq!(engine, before);
+}

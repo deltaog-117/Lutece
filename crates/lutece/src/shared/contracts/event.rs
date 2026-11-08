@@ -1,5 +1,6 @@
 //! Things that happened, as reported by a backend.
 
+use crate::input::Action;
 use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
@@ -72,6 +73,10 @@ pub enum Event {
         /// Its new style.
         style: Style,
     },
+    /// Something other than a key asked for `action`, such as a control tool or a plugin.
+    /// The engine runs it as it runs a bound key, so the request is an event like any
+    /// other and a recorded session replays it.
+    ActionRequested(Action),
 }
 
 /// Window details a layout or rule may need.

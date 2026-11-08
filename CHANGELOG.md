@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Event::ActionRequested(Action)`: the engine runs an action asked for by something other than a key (a control tool or a plugin) exactly as it runs a bound key, so the request is an event and a recorded session replays it.
 - `Style` (corner radius, border, opacity, `Transition` with a `Curve` and a duration in milliseconds), `Scene::with_style` and `Scene::style_of`, `Change::Style` and `Event::StyleChanged`; the diff announces a style change before the move it animates, and `Error::StyleWindowMissing` rejects a style for a window the scene does not show
 - Cargo workspace with three crates: `lutece` (core), `lutece-x11` and `lutece-wayland`
 - Core contracts in `lutece::shared::contracts`: `Event`, `Effect`, `Scene` and `Change`
