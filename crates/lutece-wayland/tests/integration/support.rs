@@ -234,6 +234,24 @@ impl TestClient {
         index
     }
 
+    /// Sets the title of a window, as a terminal does when its program changes it.
+    pub fn set_title(&mut self, index: usize, title: &str) {
+        let toplevel = self.observed.windows[index]
+            .toplevel
+            .as_ref()
+            .expect("the window is alive");
+        toplevel.set_title(title.to_owned());
+    }
+
+    /// Sets the app id of a window.
+    pub fn set_app_id(&mut self, index: usize, app_id: &str) {
+        let toplevel = self.observed.windows[index]
+            .toplevel
+            .as_ref()
+            .expect("the window is alive");
+        toplevel.set_app_id(app_id.to_owned());
+    }
+
     /// Asks to be fullscreen (`on`), or to stop being, as a window with a button for it does.
     pub fn request_fullscreen(&mut self, index: usize, on: bool) {
         let toplevel = self.observed.windows[index]

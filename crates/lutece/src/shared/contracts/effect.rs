@@ -7,6 +7,7 @@ use crate::shared::contracts::event::WindowInfo;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::Rect;
 use crate::shared::ids::{Tag, WinId};
+use crate::shared::names::CommandName;
 
 /// An action for the backend to carry out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,9 @@ pub enum Effect {
     Release(WinId),
     /// Stop the window manager.
     Quit,
+    /// A custom command was asked for, by a key or an action request. Nothing in the core
+    /// answers it: a plugin that provides the command does, with actions of its own.
+    CommandInvoked(CommandName),
     /// Ask whatever provides the manage hook where the new window `id` should go. It was
     /// already placed, on the workspace `tag`, by the rules. The answer is
     /// [`Event::ManageDecided`](crate::Event::ManageDecided) with the same `serial`; none is

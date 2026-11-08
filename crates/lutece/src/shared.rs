@@ -4,3 +4,4 @@ pub mod contracts;
 pub mod error;
 pub mod geometry;
 pub mod ids;
+pub mod names;

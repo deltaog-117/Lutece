@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Properties: `Event::PropertySet { target, key, value }` with `PropertyTarget` (a window or a workspace), `PropertyKey`, `PropertyValue` and the limits `MAX_NAME_BYTES`, `MAX_PROPERTY_VALUE_BYTES` and `MAX_PROPERTIES_PER_TARGET`. The engine keeps the properties as plain data, ignores a target it does not have and a new key past the limit, drops a window's properties when it closes, and gives them back with `Engine::properties` and `Engine::properties_of`.
+- Custom commands: `CommandName`, `Action::Custom` and `Effect::CommandInvoked`. Running the action asks for the command and changes nothing else.
+- `Event::PointerEntered(WinId)` and `Event::WindowInfoChanged { id, info }`; the Wayland backend reports both. A toplevel that sets its title or app id again to what it already is reports nothing.
+- Errors `InvalidCommandName`, `InvalidPropertyKey` and `PropertyValueTooLong`.
 - `Engine::reconfigure(keymap, manage_hook)`: changes the keys and the manage hook of a running engine, so a configuration can be reloaded without losing windows; workspaces, layouts and rules stay as built.
 - Window style is drawn by the nested Wayland backend: rounded corners (a GLES texture shader that replaces the default for the window's own draw calls), a border (a ring drawn by a pixel shader) and opacity. `Change::Move` animates over the style's transition (`Curve` and duration): the client gets its final size at once and is drawn scaled between the old and the new rectangle, and a move that starts while another is going begins from where the window is drawn.
 - Manage hook: `Engine::with_manage_hook`, `Effect::ManageRequested`, `Event::ManageDecided`, `ManageDecision` (move to a workspace, float or tile, focus) and `Engine::pending_manage_requests`. The window is placed by the rules at once and the decision moves it afterwards; the engine never waits.
@@ -124,6 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland`: the stacking order of X11 windows under Xwayland follows the scene (`_NET_CLIENT_LIST_STACKING`), a fullscreen window above the others; it is redone when the order or a fullscreen state changes
 
 ### Changed
+- The Wayland backend reports the pointer entering a window as `Event::PointerEntered`, not `Event::FocusRequested`. The core focuses the window for both, so the screen behaves the same; a host that matched on `FocusRequested` to see the pointer must now match on the new event. The X11 backend still sends `FocusRequested` for it.
 - `Engine::scene` lays out in the area bars leave free and puts a fullscreen window on the whole output; floating windows are centered in the free area
 - `Scene` now holds the set of fullscreen windows; `Scene::try_new` is unchanged and starts with none
 - `Change` gains `Fullscreen`; backends that match on it already have a catch-all arm, since the enum is `#[non_exhaustive]`

@@ -1626,3 +1626,19 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### Properties, custom commands and richer events
+
+- **Why:** the window manager's plugins need to keep a little state of their own in the core, to be asked for by name, and to hear that a window's title changed or that the pointer entered it. The window manager is the only user so far.
+- **Properties (no COA, the roadmap had chosen):** a string map per window or workspace, changed by one event, so a recorded session and a replay hold the same ones. Keys, values and the count per target are bounded where they are built, so a plugin cannot grow the core or a log without limit. An empty target has no entry in the map, so two engines that reached the same properties by different sets and removals compare equal (a property test checks this).
+- **Custom commands:** an action that the core only reports, as an effect. I chose this over a core that stores a command's actions: the core stays free of plugin policy, and a plugin's answers are ordinary action requests, which are events, so a replay does not need the plugin to reach the same state. The cost is that a key bound to a command does nothing when the plugin is not there.
+- **Pointer entry:** a separate event, which the core handles as a focus request. Wayland now sends it instead of `FocusRequested`; X11 was left as it was, so the two backends differ until X11 is done. I did not send both on Wayland: a host would then see every entry twice.
+- **Title and class:** Smithay calls its title and app id hooks when each request arrives, not when the surface commits, so a client that sets both makes two reports. I first wrote a comment saying it makes one; the Smithay source showed otherwise. The backend remembers what the core was last told and sends the event only when the info differs, with the complete info each time. The X11 backend does not report these yet.
+- **Tests:** the core's property tests (the limit, no empty entries, a replay ends equal), unit tests for each event and the action, and Wayland tests with a real client for the pointer event and for a changed title, a changed class and a repeated value.
+- **Not done:** X11 pointer, title and class; `Engine` keeps no title or class, so the core cannot answer "what is this window called" (a plugin keeps its own from the events).
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

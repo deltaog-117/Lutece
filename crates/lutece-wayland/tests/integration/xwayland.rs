@@ -503,7 +503,7 @@ fn an_x11_menu_is_not_managed_and_is_in_front_of_the_window_below() {
         let asks = fixture
             .seen
             .iter()
-            .filter(|event| **event == Event::FocusRequested(id))
+            .filter(|event| **event == Event::PointerEntered(id))
             .count();
         (asks >= 2).then_some(())
     });

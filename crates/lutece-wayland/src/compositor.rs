@@ -212,7 +212,26 @@ impl State {
         let Some((id, toplevel)) = self.windows.announce(surface) else {
             return;
         };
-        let (title, class) = with_states(surface, |states| {
+        // The initial configure is what lets the client map; the sized one follows in the
+        // scene. A window the core never places still completes its handshake.
+        if !toplevel.is_initial_configure_sent() {
+            toplevel.send_configure();
+        }
+        let info = self.toplevel_info(&toplevel);
+        self.windows.remember_info(id, info.clone());
+        self.events.push(Event::WindowOpened { id, info });
+        // A window that asked for fullscreen before it opened asks again now that the
+        // core knows it.
+        if self.windows.take_early_fullscreen(surface) {
+            self.events
+                .push(Event::FullscreenRequested { id, on: true });
+        }
+    }
+
+    /// What the client has set on `toplevel`: its title and app id, and the window it is a
+    /// dialog for.
+    fn toplevel_info(&self, toplevel: &ToplevelSurface) -> WindowInfo {
+        let (title, class) = with_states(toplevel.wl_surface(), |states| {
             states
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
@@ -225,26 +244,26 @@ impl State {
                 })
                 .unwrap_or_default()
         });
-        let parent = toplevel.parent();
-        // The initial configure is what lets the client map; the sized one follows in the
-        // scene. A window the core never places still completes its handshake.
-        if !toplevel.is_initial_configure_sent() {
-            toplevel.send_configure();
+        WindowInfo {
+            title,
+            class,
+            transient_for: toplevel
+                .parent()
+                .and_then(|parent| self.windows.id_of(&parent)),
         }
-        let transient_for = parent.and_then(|parent| self.windows.id_of(&parent));
-        self.events.push(Event::WindowOpened {
-            id,
-            info: WindowInfo {
-                title,
-                class,
-                transient_for,
-            },
-        });
-        // A window that asked for fullscreen before it opened asks again now that the
-        // core knows it.
-        if self.windows.take_early_fullscreen(surface) {
-            self.events
-                .push(Event::FullscreenRequested { id, on: true });
+    }
+
+    /// Tells the core when a toplevel's title or app id is not what it was last told. The
+    /// client's requests arrive one at a time, so one that sets both makes two events; each
+    /// carries the complete info.
+    fn report_info_change(&mut self, toplevel: &ToplevelSurface) {
+        let Some(id) = self.windows.id_of(toplevel.wl_surface()) else {
+            // Not announced yet: its first commit reports the final values.
+            return;
+        };
+        let info = self.toplevel_info(toplevel);
+        if self.windows.info_changed(id, &info) {
+            self.events.push(Event::WindowInfoChanged { id, info });
         }
     }
 
@@ -385,9 +404,13 @@ impl XdgShellHandler for State {
         self.request_fullscreen(surface.wl_surface(), false);
     }
 
-    fn title_changed(&mut self, _surface: ToplevelSurface) {}
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        self.report_info_change(&surface);
+    }
 
-    fn app_id_changed(&mut self, _surface: ToplevelSurface) {}
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        self.report_info_change(&surface);
+    }
 }
 
 impl SeatHandler for State {

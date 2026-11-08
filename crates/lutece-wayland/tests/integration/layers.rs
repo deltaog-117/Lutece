@@ -173,7 +173,7 @@ fn a_bar_receives_the_pointer_and_the_core_is_not_asked_to_focus_it() {
 
     assert!(client.pointer_on_bar(bar));
     assert_eq!(client.pointer_position(), Some((500.0, 10.0)));
-    assert!(!events.iter().any(|e| matches!(e, Event::FocusRequested(_))));
+    assert!(!events.iter().any(|e| matches!(e, Event::PointerEntered(_))));
 }
 
 #[test]

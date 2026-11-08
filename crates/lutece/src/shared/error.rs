@@ -41,6 +41,20 @@ pub enum Error {
     /// A workspace tag needs visible text.
     #[error("workspace tag must not be empty")]
     EmptyTag,
+    /// A command name is one to 64 visible ASCII characters.
+    #[error("a command name is 1 to 64 visible ASCII characters, with no space")]
+    InvalidCommandName,
+    /// A property key is one to 64 visible ASCII characters.
+    #[error("a property key is 1 to 64 visible ASCII characters, with no space")]
+    InvalidPropertyKey,
+    /// A property value has a size limit.
+    #[error("a property value is at most {max} bytes, got {len}")]
+    PropertyValueTooLong {
+        /// The size of the rejected value.
+        len: usize,
+        /// The longest value accepted.
+        max: usize,
+    },
     /// Two workspaces cannot share a tag.
     #[error("workspace tag {0} is used more than once")]
     DuplicateTag(Tag),

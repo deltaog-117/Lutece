@@ -2,6 +2,7 @@
 
 use crate::shared::contracts::effect::SpawnCommand;
 use crate::shared::ids::Tag;
+use crate::shared::names::CommandName;
 
 /// An operation a key binding triggers.
 ///
@@ -58,6 +59,11 @@ pub enum Action {
     /// Resize the focused window by a step: right and down widen and heighten it, left
     /// and up narrow and shorten it. Does nothing unless it floats.
     ResizeFloat(Direction),
+    /// Tell whatever provides the command that it was asked for, with
+    /// [`Effect::CommandInvoked`](crate::Effect::CommandInvoked). The core does nothing
+    /// else: what the command means is up to its plugin, which answers with ordinary
+    /// actions, so a replayed session needs no plugin to reach the same state.
+    Custom(CommandName),
 }
 
 /// One of the four ways a floating window can be nudged.

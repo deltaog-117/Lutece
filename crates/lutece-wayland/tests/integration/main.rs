@@ -12,4 +12,5 @@ mod presence;
 mod protocol;
 mod scale;
 mod support;
+mod window_info;
 mod xwayland;

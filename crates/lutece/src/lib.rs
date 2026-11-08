@@ -18,7 +18,7 @@ pub use layout::{Layout, MasterRatio};
 pub use rules::{ManageRule, Match, Outcome, Rules};
 pub use shared::contracts::effect::{Effect, SpawnCommand};
 pub use shared::contracts::event::{
-    Event, KeyPress, Keysym, ManageDecision, Modifiers, Output, WindowInfo,
+    Event, KeyPress, Keysym, ManageDecision, Modifiers, Output, PropertyTarget, WindowInfo,
 };
 pub use shared::contracts::scene::{Placement, Scene};
 pub use shared::contracts::scene_diff::{Change, diff};
@@ -26,5 +26,9 @@ pub use shared::contracts::style::{Border, Curve, Rgba, Style, Transition};
 pub use shared::error::{Error, Result};
 pub use shared::geometry::{Insets, Point, Rect, Size};
 pub use shared::ids::{OutputId, Tag, WinId};
+pub use shared::names::{
+    CommandName, MAX_NAME_BYTES, MAX_PROPERTIES_PER_TARGET, MAX_PROPERTY_VALUE_BYTES, PropertyKey,
+    PropertyValue,
+};
 pub use stack::stackset::StackSet;
 pub use stack::workspace::Workspace;

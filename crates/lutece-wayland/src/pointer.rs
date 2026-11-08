@@ -156,14 +156,14 @@ impl State {
         pointer.frame(self);
     }
 
-    /// Asks the core to focus the window the pointer entered.
+    /// Tells the core the pointer entered a window, which it focuses.
     fn follow_pointer(&mut self, over: Option<WinId>) {
         if self.pointer.over == over {
             return;
         }
         self.pointer.over = over;
         if let Some(id) = over {
-            self.events.push(Event::FocusRequested(id));
+            self.events.push(Event::PointerEntered(id));
             // Entering a window gives the keyboard back to the core's focus.
             self.release_layer_focus();
         }

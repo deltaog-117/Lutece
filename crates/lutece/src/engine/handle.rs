@@ -4,9 +4,10 @@ use super::Engine;
 use crate::input::Action;
 use crate::rules::Outcome;
 use crate::shared::contracts::effect::Effect;
-use crate::shared::contracts::event::{Event, WindowInfo};
+use crate::shared::contracts::event::{Event, PropertyTarget, WindowInfo};
 use crate::shared::contracts::style::Style;
 use crate::shared::ids::WinId;
+use crate::shared::names::{MAX_PROPERTIES_PER_TARGET, PropertyKey, PropertyValue};
 
 /// How far one key press moves the master column, in thousandths of the width.
 const MASTER_STEP: i16 = 50;
@@ -53,11 +54,15 @@ impl Engine {
                 // Already gone: nothing left to remove.
                 let _ = self.stacks.remove(id);
                 self.styles.remove(&id);
+                self.properties.remove(&PropertyTarget::Window(id));
             }
-            Event::FocusRequested(id) => {
+            Event::FocusRequested(id) | Event::PointerEntered(id) => {
                 // Not managed (never opened, or just closed): nothing to focus.
                 let _ = self.stacks.focus_window(id);
             }
+            // Nothing to keep: the event exists for the plugins that watch the stream.
+            Event::WindowInfoChanged { .. } => {}
+            Event::PropertySet { target, key, value } => self.set_property(target, key, value),
             Event::FloatAdjusted { id, dx, dy, dw, dh } => {
                 // A floating size is relative to the screen, so with no screen yet only
                 // the movement applies.
@@ -101,6 +106,37 @@ impl Engine {
         }
         self.request_layouts(&mut effects);
         effects
+    }
+
+    fn set_property(
+        &mut self,
+        target: PropertyTarget,
+        key: PropertyKey,
+        value: Option<PropertyValue>,
+    ) {
+        let exists = match &target {
+            PropertyTarget::Window(id) => self.stacks.contains(*id),
+            PropertyTarget::Workspace(tag) => self.stacks.tags().any(|known| known == tag),
+        };
+        if !exists {
+            return;
+        }
+        match value {
+            Some(value) => {
+                let entries = self.properties.entry(target).or_default();
+                if entries.contains_key(&key) || entries.len() < MAX_PROPERTIES_PER_TARGET {
+                    entries.insert(key, value);
+                }
+            }
+            None => {
+                if let Some(entries) = self.properties.get_mut(&target) {
+                    entries.remove(&key);
+                    if entries.is_empty() {
+                        self.properties.remove(&target);
+                    }
+                }
+            }
+        }
     }
 
     fn open(&mut self, id: WinId, info: &WindowInfo, effects: &mut Vec<Effect>) {
@@ -192,6 +228,7 @@ impl Engine {
                 self.stacks
                     .update_focused_float(|float| float.moved(dx, dy));
             }
+            Action::Custom(name) => effects.push(Effect::CommandInvoked(name)),
             Action::ResizeFloat(direction) => {
                 // A floating size is relative to the screen, so with no screen yet there
                 // is nothing to resize against.

@@ -11,7 +11,7 @@
 //! program put them.
 
 use crate::animation::Animation;
-use lutece::{Rect, Style, WinId};
+use lutece::{Rect, Style, WinId, WindowInfo};
 use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
@@ -110,6 +110,9 @@ pub(crate) struct Windows {
     managed: HashMap<WinId, Entry>,
     /// Stacking order, bottom to top.
     order: Vec<WinId>,
+    /// What the core was last told about each toplevel's title and class, so a commit that
+    /// changes neither reports nothing.
+    infos: HashMap<WinId, WindowInfo>,
     /// Toplevels that asked for fullscreen before they were announced, as a player that
     /// starts fullscreen does. The request is passed on when the window opens.
     early_fullscreen: Vec<WlSurface>,
@@ -150,6 +153,23 @@ impl Windows {
             },
         );
         id
+    }
+
+    /// Notes what the core was told about `id` when it opened.
+    pub(crate) fn remember_info(&mut self, id: WinId, info: WindowInfo) {
+        self.infos.insert(id, info);
+    }
+
+    /// Notes `info` as the latest of a toplevel and returns whether it differs from what the
+    /// core was last told. A window that was never announced has nothing to differ from.
+    pub(crate) fn info_changed(&mut self, id: WinId, info: &WindowInfo) -> bool {
+        match self.infos.get_mut(&id) {
+            Some(known) if known != info => {
+                known.clone_from(info);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Remembers that a toplevel that is not announced yet asked for fullscreen (`on`),
@@ -294,6 +314,7 @@ impl Windows {
     /// Stops managing a window without destroying it.
     pub(crate) fn release(&mut self, id: WinId) -> Option<Entry> {
         self.order.retain(|other| *other != id);
+        self.infos.remove(&id);
         self.managed.remove(&id)
     }
 

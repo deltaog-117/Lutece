@@ -6,6 +6,7 @@ use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
 use crate::shared::ids::{OutputId, Tag, WinId};
+use crate::shared::names::{PropertyKey, PropertyValue};
 use std::ops::BitOr;
 
 /// Something a backend tells the core about. Only events with the same meaning on X11
@@ -23,8 +24,34 @@ pub enum Event {
     },
     /// A client window is gone.
     WindowClosed(WinId),
-    /// A window asked for focus, or the pointer entered it.
+    /// A window asked for focus. A backend that reports the pointer entering a window with
+    /// [`Event::PointerEntered`] no longer sends this for it.
     FocusRequested(WinId),
+    /// The pointer entered a window. The core focuses it, as it does for
+    /// [`Event::FocusRequested`]; the event is separate so a plugin can tell the two apart.
+    /// An unknown window is ignored.
+    PointerEntered(WinId),
+    /// A window's title or application class changed; `info` is the complete new set. The
+    /// core keeps nothing of it, since rules look at a window only when it opens, so the
+    /// event is for plugins. An unknown window is ignored.
+    WindowInfoChanged {
+        /// The window.
+        id: WinId,
+        /// What the backend knows about it now.
+        info: WindowInfo,
+    },
+    /// A plugin set a property of a window or workspace, or removed it with `None`. The
+    /// core keeps the properties as plain data, so a replayed session has the same ones. A
+    /// target the core does not have is ignored, and so is a new key on a target that
+    /// already holds [`MAX_PROPERTIES_PER_TARGET`](crate::MAX_PROPERTIES_PER_TARGET).
+    PropertySet {
+        /// The window or workspace.
+        target: PropertyTarget,
+        /// The property.
+        key: PropertyKey,
+        /// The new value, or `None` to remove it.
+        value: Option<PropertyValue>,
+    },
     /// A key combination the core asked the backend to grab was pressed.
     KeyPressed(KeyPress),
     /// The pointer dragged a window: it moved by `dx`, `dy` and grew by `dw`, `dh`
@@ -99,6 +126,16 @@ pub enum Event {
         /// The windows and their rectangles.
         placements: Vec<Placement>,
     },
+}
+
+/// What a property belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum PropertyTarget {
+    /// A managed window. Its properties go when it closes.
+    Window(WinId),
+    /// A workspace, which lasts as long as the engine.
+    Workspace(Tag),
 }
 
 /// What a plugin decided for a new window. Every part is optional: leaving one out leaves

@@ -13,10 +13,12 @@ use crate::layout::Layout;
 use crate::rules::Rules;
 use crate::shared::contracts::event::KeyPress;
 use crate::shared::contracts::event::Output;
+use crate::shared::contracts::event::PropertyTarget;
 use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
 use crate::shared::ids::{OutputId, WinId};
+use crate::shared::names::{PropertyKey, PropertyValue};
 use crate::stack::stackset::StackSet;
 use std::collections::HashMap;
 
@@ -56,6 +58,9 @@ pub struct Engine {
     /// The style each managed window was given; a window with none has the default.
     /// Kept only for managed windows, and only while it differs from the default.
     styles: HashMap<WinId, Style>,
+    /// The properties plugins set, by what they belong to. A target with none has no entry,
+    /// so two engines that went through different sets and removals still compare equal.
+    properties: HashMap<PropertyTarget, std::collections::BTreeMap<PropertyKey, PropertyValue>>,
     /// The external layout of each workspace that has used it.
     external: external::Slots,
     /// Whether a new window is offered to the manage hook.
@@ -80,6 +85,7 @@ impl Engine {
             outputs: Vec::new(),
             reserved: HashMap::new(),
             styles: HashMap::new(),
+            properties: HashMap::new(),
             manage_hook: false,
             manage_pending: std::collections::BTreeMap::new(),
             external: external::Slots::new(),
@@ -156,6 +162,23 @@ impl Engine {
     #[must_use]
     pub fn stacks(&self) -> &StackSet {
         &self.stacks
+    }
+
+    /// The properties of `target`, by key.
+    pub fn properties_of(
+        &self,
+        target: &PropertyTarget,
+    ) -> impl Iterator<Item = (&PropertyKey, &PropertyValue)> + '_ {
+        self.properties.get(target).into_iter().flatten()
+    }
+
+    /// Every property there is, with what it belongs to, in no fixed order between targets.
+    pub fn properties(
+        &self,
+    ) -> impl Iterator<Item = (&PropertyTarget, &PropertyKey, &PropertyValue)> + '_ {
+        self.properties.iter().flat_map(|(target, entries)| {
+            entries.iter().map(move |(key, value)| (target, key, value))
+        })
     }
 
     /// The area `output` covers, if the backend reported it. A fullscreen window fills it.

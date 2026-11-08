@@ -70,7 +70,7 @@ fn entering_a_window_asks_for_focus_and_the_client_sees_where() {
     s.backend.pointer_motion(x, y, 1);
     let events = s.client.settle(&mut s.backend);
 
-    assert!(events.contains(&Event::FocusRequested(s.id)));
+    assert!(events.contains(&Event::PointerEntered(s.id)));
     assert_eq!(s.client.pointer_enters(), 1);
     assert_eq!(s.client.pointer_position(), Some((30.0, 40.0)));
 }
@@ -85,7 +85,7 @@ fn moving_inside_a_window_does_not_ask_again() {
     s.backend.pointer_motion(x + 10.0, y + 5.0, 2);
     let events = s.client.settle(&mut s.backend);
 
-    assert!(!events.iter().any(|e| matches!(e, Event::FocusRequested(_))));
+    assert!(!events.iter().any(|e| matches!(e, Event::PointerEntered(_))));
     assert_eq!(s.client.pointer_enters(), 1);
     assert_eq!(s.client.pointer_position(), Some((40.0, 45.0)));
 }
@@ -99,7 +99,7 @@ fn empty_space_asks_for_nothing() {
     s.backend.pointer_motion(x, y, 1);
     let events = s.client.settle(&mut s.backend);
 
-    assert!(!events.iter().any(|e| matches!(e, Event::FocusRequested(_))));
+    assert!(!events.iter().any(|e| matches!(e, Event::PointerEntered(_))));
     assert_eq!(s.client.pointer_enters(), 0);
 }
 
