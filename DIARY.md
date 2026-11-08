@@ -1509,3 +1509,48 @@ Stacking and active window:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-06 | Initial entry | deltaog-117 |
+
+### Window style and animation in the scene
+
+**Date:** 2026-11-08
+**Status:** Confirmed
+
+#### Context / Background
+
+The window manager built on this library needs windows that look and move well: rounded corners, borders, opacity and animated moves. `Scene` only said where windows are. Two decisions were taken together because both change what the core hands to a backend: where a window's look lives, and how its animation is described.
+
+#### Options Considered
+
+Where the style lives:
+
+| COA | Approach | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|---|
+| A | Inside each `Placement` | One record per window | Breaks every place that builds a placement | M |
+| B | A checked list on `Scene`, like fullscreen | Non-breaking, replayable, validated | Two lookups per window | M |
+| C | A table outside the core | No contract change | Not logged or replayed | S |
+
+Animation:
+
+| COA | Approach | Advantages | Disadvantages | Difficulty |
+|---|---|---|---|---|
+| A | The renderer tweens with host settings | Simple | One curve unless overridden | M |
+| B | The spec travels in the scene | Per-window control, logged | Larger contract | H |
+
+#### Decision & Rationale
+
+**Chosen Options:** style B, animation B. The spec is part of `Style` as a `Transition`, so one list and one change kind carry both. I had recommended A for animation; B was chosen for per-window control by plugins and for keeping animation in the log.
+
+#### Implementation Notes
+
+- **Eq stays:** `Scene` derives `Eq`, so opacity is `u8`, durations are `u16` milliseconds and curves are a fixed enum. No floats.
+- **Canonical form:** a style equal to the default is not stored, so two scenes that look the same compare equal however they were built. The default is opaque, because an opacity of zero would hide a window with no style.
+- **Order in the diff:** `Change::Style` comes after fullscreen and before shows and moves, so a backend knows the curve before it starts the move. A style dropped back to the default is announced as the default so the backend forgets the old one. A window that leaves gets only `Hide`.
+- **Engine:** `Event::StyleChanged` is ignored for an unknown window, so nothing lingers; a closed window loses its style; a window on a hidden workspace keeps its style and gets it back on return. The scene lists styles only for windows it shows.
+- **Tests:** the diff property test now generates styles and its stand-in backend applies `Change::Style`, so applying the diff still reaches the new scene; the engine event-stream property test includes style events, and four tests cover the event, unknown and closed windows, and hidden windows. `scripts/check` passes.
+- **Not done:** no backend draws style or runs transitions yet; both backends skip `Change::Style`. That is the next roadmap item.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

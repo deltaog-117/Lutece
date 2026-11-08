@@ -26,6 +26,9 @@ pub enum Error {
     /// Only a window the scene shows can be fullscreen.
     #[error("fullscreen window {0:?} is not in the scene")]
     FullscreenWindowMissing(WinId),
+    /// Only a window the scene shows can have a style.
+    #[error("styled window {0:?} is not in the scene")]
+    StyleWindowMissing(WinId),
     /// A spawn effect needs a program to run.
     #[error("spawn command has an empty program name")]
     EmptyProgram,

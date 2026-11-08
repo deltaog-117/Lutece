@@ -50,6 +50,14 @@ impl Engine {
         let focus = self
             .area_of(self.stacks.current_output())
             .and(self.stacks.focused());
-        Scene::try_new(placements, focus)?.with_fullscreen(fullscreen)
+        // Only the windows shown get a style: one on a hidden workspace keeps its style
+        // in the engine and gets it back when it returns.
+        let styled: Vec<_> = placements
+            .iter()
+            .filter_map(|p| self.styles.get(&p.id).map(|style| (p.id, *style)))
+            .collect();
+        Scene::try_new(placements, focus)?
+            .with_fullscreen(fullscreen)?
+            .with_style(styled)
     }
 }

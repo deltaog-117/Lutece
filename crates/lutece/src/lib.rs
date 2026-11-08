@@ -20,6 +20,7 @@ pub use shared::contracts::effect::{Effect, SpawnCommand};
 pub use shared::contracts::event::{Event, KeyPress, Keysym, Modifiers, Output, WindowInfo};
 pub use shared::contracts::scene::{Placement, Scene};
 pub use shared::contracts::scene_diff::{Change, diff};
+pub use shared::contracts::style::{Border, Curve, Rgba, Style, Transition};
 pub use shared::error::{Error, Result};
 pub use shared::geometry::{Insets, Point, Rect, Size};
 pub use shared::ids::{OutputId, Tag, WinId};

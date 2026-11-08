@@ -7,3 +7,4 @@ pub mod effect;
 pub mod event;
 pub mod scene;
 pub mod scene_diff;
+pub mod style;

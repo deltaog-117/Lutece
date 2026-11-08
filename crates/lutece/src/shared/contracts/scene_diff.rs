@@ -2,6 +2,7 @@
 //! only what differs instead of redrawing everything.
 
 use super::scene::{Placement, Scene};
+use super::style::Style;
 use crate::shared::ids::WinId;
 
 /// One step a backend applies to its current state.
@@ -25,13 +26,24 @@ pub enum Change {
         /// Whether it is now fullscreen.
         on: bool,
     },
+    /// The window's style, animation included, differs from what it was. A window that
+    /// appears with a non-default style gets this change ahead of its `Show`, and one that
+    /// returns to the default gets it with the default style. A window that leaves the
+    /// scene gets only a `Hide`; its style is forgotten. It comes before any `Move`, so a
+    /// backend starts the move with the right animation.
+    Style {
+        /// The window.
+        id: WinId,
+        /// Its style now.
+        style: Style,
+    },
     /// Focus changed.
     Focus(Option<WinId>),
 }
 
 /// Compares two scenes.
 ///
-/// Changes come in a fixed order: hides, then fullscreen changes, then shows and moves in
+/// Changes come in a fixed order: hides, then fullscreen changes, then style changes, then shows and moves in
 /// stacking order, then at most one restack, then at most one focus change. Hiding first
 /// frees the space before newcomers fill it, and fullscreen comes before the placement
 /// so a backend that sizes a window by its state does it once. A restack is sent whenever a window is shown, because
@@ -72,6 +84,16 @@ pub fn diff(old: &Scene, new: &Scene) -> Vec<Change> {
         (was != on).then_some(Change::Fullscreen { id: p.id, on })
     });
 
+    let styles = new.placements().iter().filter_map(|p| {
+        // A window that was not visible before starts from the default style.
+        let was = old.style_of(p.id);
+        let now = new.style_of(p.id);
+        (was != now).then_some(Change::Style {
+            id: p.id,
+            style: now,
+        })
+    });
+
     let new_order: Vec<WinId> = new.placements().iter().map(|p| p.id).collect();
     let surviving_order = old
         .placements()
@@ -85,6 +107,7 @@ pub fn diff(old: &Scene, new: &Scene) -> Vec<Change> {
 
     hides
         .chain(fullscreen)
+        .chain(styles)
         .chain(shows_and_moves)
         .chain(restack)
         .chain(focus)
@@ -94,6 +117,7 @@ pub fn diff(old: &Scene, new: &Scene) -> Vec<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::contracts::style::{Curve, Rgba, Transition};
     use crate::shared::geometry::Rect;
     use proptest::prelude::*;
     use std::collections::{HashMap, HashSet};
@@ -103,14 +127,33 @@ mod tests {
             .prop_map(|(x, y, w, h)| Rect::new(x, y, w, h).expect("generated non-zero size"))
     }
 
+    fn style_strategy() -> impl Strategy<Value = Style> {
+        (0u16..40, 0u16..8, any::<u8>(), 0u16..500, 0usize..4).prop_map(
+            |(radius, width, opacity, duration_ms, curve)| {
+                let curve = [
+                    Curve::Linear,
+                    Curve::EaseIn,
+                    Curve::EaseOut,
+                    Curve::EaseInOut,
+                ][curve];
+                Style::default()
+                    .with_radius(radius)
+                    .with_border(width, Rgba::new(width as u8, 0, 0, 255))
+                    .with_opacity(opacity)
+                    .with_transition(Transition { curve, duration_ms })
+            },
+        )
+    }
+
     /// Windows come from a small id range so two generated scenes usually overlap.
     fn scene_strategy() -> impl Strategy<Value = Scene> {
         (
             proptest::collection::vec((0u64..12, rect_strategy()), 0..10),
             proptest::option::of(any::<usize>()),
             0u64..4,
+            proptest::collection::vec(style_strategy(), 12),
         )
-            .prop_map(|(raw, focus_pick, fullscreen_salt)| {
+            .prop_map(|(raw, focus_pick, fullscreen_salt, styles)| {
                 let mut seen = HashSet::new();
                 let placements: Vec<Placement> = raw
                     .into_iter()
@@ -128,10 +171,21 @@ mod tests {
                     .filter(|p| p.id.get() % 3 == fullscreen_salt % 3)
                     .map(|p| p.id)
                     .collect();
+                // Every third window stays unstyled so the default-style paths run too.
+                let styled: Vec<(WinId, Style)> = placements
+                    .iter()
+                    .filter(|p| p.id.get() % 3 != 0)
+                    .map(|p| (p.id, styles[p.id.get() as usize]))
+                    .collect();
                 Scene::try_new(placements, focus)
                     .and_then(|scene| scene.with_fullscreen(fullscreen))
-                    .expect("ids are deduplicated, focus and fullscreen are listed")
+                    .and_then(|scene| scene.with_style(styled))
+                    .expect("ids are deduplicated, focus, fullscreen and styles are listed")
             })
+    }
+
+    fn order_ids(placements: &[Placement]) -> Vec<WinId> {
+        placements.iter().map(|p| p.id).collect()
     }
 
     /// A stand-in backend: it only knows what the changes tell it.
@@ -140,6 +194,11 @@ mod tests {
             old.placements().iter().map(|p| (p.id, p.rect)).collect();
         let mut order: Vec<WinId> = old.placements().iter().map(|p| p.id).collect();
         let mut focus = old.focus();
+        let mut styles: HashMap<WinId, Style> = old
+            .placements()
+            .iter()
+            .map(|p| (p.id, old.style_of(p.id)))
+            .collect();
         let mut fullscreen: HashSet<WinId> = old
             .placements()
             .iter()
@@ -153,6 +212,10 @@ mod tests {
                     rects.remove(id);
                     order.retain(|other| other != id);
                     fullscreen.remove(id);
+                    styles.remove(id);
+                }
+                Change::Style { id, style } => {
+                    styles.insert(*id, *style);
                 }
                 Change::Fullscreen { id, on } => {
                     if *on {
@@ -173,15 +236,20 @@ mod tests {
             }
         }
 
-        let placements = order
+        let placements: Vec<Placement> = order
             .into_iter()
             .map(|id| Placement {
                 id,
                 rect: rects[&id],
             })
             .collect();
+        let styled: Vec<(WinId, Style)> = order_ids(&placements)
+            .into_iter()
+            .map(|id| (id, styles.get(&id).copied().unwrap_or_default()))
+            .collect();
         Scene::try_new(placements, focus)
             .and_then(|scene| scene.with_fullscreen(fullscreen))
+            .and_then(|scene| scene.with_style(styled))
             .expect("changes keep the scene valid")
     }
 
@@ -214,6 +282,49 @@ mod tests {
                 .collect();
             prop_assert_eq!(hidden, left);
         }
+    }
+
+    #[test]
+    fn a_style_change_comes_before_the_move_it_animates() {
+        let a = WinId::new(1);
+        let at = |x| Placement {
+            id: a,
+            rect: Rect::new(x, 0, 10, 10).expect("non-zero size"),
+        };
+        let style = Style::default().with_transition(Transition {
+            curve: Curve::EaseOut,
+            duration_ms: 200,
+        });
+        let before = Scene::try_new(vec![at(0)], None).expect("valid scene");
+        let after = Scene::try_new(vec![at(50)], None)
+            .and_then(|scene| scene.with_style([(a, style)]))
+            .expect("valid scene");
+
+        assert_eq!(
+            diff(&before, &after),
+            [Change::Style { id: a, style }, Change::Move(at(50))]
+        );
+        // Dropping the style reports the default so the backend can forget the old one.
+        assert_eq!(
+            diff(&after, &before),
+            [
+                Change::Style {
+                    id: a,
+                    style: Style::default()
+                },
+                Change::Move(at(0))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_window_that_leaves_forgets_its_style() {
+        let a = WinId::new(1);
+        let rect = Rect::new(0, 0, 10, 10).expect("non-zero size");
+        let styled = Scene::try_new(vec![Placement { id: a, rect }], None)
+            .and_then(|scene| scene.with_style([(a, Style::default().with_radius(6))]))
+            .expect("valid scene");
+        assert_eq!(diff(&styled, &Scene::empty()), [Change::Hide(a)]);
     }
 
     #[test]

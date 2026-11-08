@@ -1,5 +1,6 @@
 //! Things that happened, as reported by a backend.
 
+use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
 use crate::shared::ids::{OutputId, WinId};
@@ -62,6 +63,14 @@ pub enum Event {
         output: OutputId,
         /// What they reserve.
         insets: Insets,
+    },
+    /// A window's style, animation included, is now `style`. The default style clears it.
+    /// An unknown window is ignored; a window that closes loses its style.
+    StyleChanged {
+        /// The window.
+        id: WinId,
+        /// Its new style.
+        style: Style,
     },
 }
 

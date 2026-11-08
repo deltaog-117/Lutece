@@ -5,6 +5,7 @@ use crate::input::Action;
 use crate::rules::Outcome;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::event::{Event, WindowInfo};
+use crate::shared::contracts::style::Style;
 use crate::shared::ids::WinId;
 
 /// How far one key press moves the master column, in thousandths of the width.
@@ -23,6 +24,7 @@ impl Engine {
     /// released to its client with [`Effect::Release`] if a rule ignores it.
     /// A fullscreen request makes the window fill its whole screen, and the bars' reserve
     /// reported with `ReservedChanged` shrinks the area the other windows share.
+    /// A style change gives a managed window its look and animation.
     /// A drag of a floating window moves and resizes it, as the move and resize keys do.
     /// A key press runs the action bound to it in the engine's keymap, and a press with
     /// no binding does nothing. Only some actions produce effects: quitting, closing the
@@ -38,6 +40,7 @@ impl Engine {
             Event::WindowClosed(id) => {
                 // Already gone: nothing left to remove.
                 let _ = self.stacks.remove(id);
+                self.styles.remove(&id);
             }
             Event::FocusRequested(id) => {
                 // Not managed (never opened, or just closed): nothing to focus.
@@ -63,6 +66,15 @@ impl Engine {
                     self.reserved.remove(&output);
                 } else {
                     self.reserved.insert(output, insets);
+                }
+            }
+            Event::StyleChanged { id, style } => {
+                if !self.stacks.contains(id) {
+                    // Not managed: a style for it could never be shown, and would linger.
+                } else if style == Style::default() {
+                    self.styles.remove(&id);
+                } else {
+                    self.styles.insert(id, style);
                 }
             }
             Event::OutputsChanged(outputs) => {

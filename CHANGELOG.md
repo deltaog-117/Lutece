@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Style` (corner radius, border, opacity, `Transition` with a `Curve` and a duration in milliseconds), `Scene::with_style` and `Scene::style_of`, `Change::Style` and `Event::StyleChanged`; the diff announces a style change before the move it animates, and `Error::StyleWindowMissing` rejects a style for a window the scene does not show
 - Cargo workspace with three crates: `lutece` (core), `lutece-x11` and `lutece-wayland`
 - Core contracts in `lutece::shared::contracts`: `Event`, `Effect`, `Scene` and `Change`
 - `diff`, which compares two scenes and returns the minimal changes a backend must apply

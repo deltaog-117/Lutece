@@ -12,9 +12,10 @@ use crate::layout::Layout;
 use crate::rules::Rules;
 use crate::shared::contracts::event::KeyPress;
 use crate::shared::contracts::event::Output;
+use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
-use crate::shared::ids::OutputId;
+use crate::shared::ids::{OutputId, WinId};
 use crate::stack::stackset::StackSet;
 use std::collections::HashMap;
 
@@ -51,6 +52,9 @@ pub struct Engine {
     /// nothing reserved has no entry. Kept when an output disappears, so a bar that
     /// outlives a monitor change is still honoured when its output returns.
     reserved: HashMap<OutputId, Insets>,
+    /// The style each managed window was given; a window with none has the default.
+    /// Kept only for managed windows, and only while it differs from the default.
+    styles: HashMap<WinId, Style>,
 }
 
 impl Engine {
@@ -64,6 +68,7 @@ impl Engine {
             rules: Rules::new(),
             outputs: Vec::new(),
             reserved: HashMap::new(),
+            styles: HashMap::new(),
         }
     }
 

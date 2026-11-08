@@ -1,9 +1,9 @@
 //! Recorded event streams replayed through the engine, with the resulting scene checked.
 
 use lutece::{
-    Action, Change, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap, Keysym,
-    Layout, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene,
-    SpawnCommand, StackSet, Tag, WinId, WindowInfo, diff,
+    Action, Change, Curve, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap,
+    Keysym, Layout, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Rect, Rules, Scene,
+    SpawnCommand, StackSet, Style, Tag, Transition, WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -244,6 +244,23 @@ fn arbitrary_event() -> impl Strategy<Value = Event> {
         (100u32..2000, 100u32..2000).prop_map(|(width, height)| screen(width, height)),
         Just(Event::OutputsChanged(vec![])),
         ((0u64..8), any::<bool>()).prop_map(|(n, on)| Event::FullscreenRequested { id: w(n), on }),
+        // Styles for windows that may not exist, may be hidden, or may be reset to plain.
+        ((0u64..8), 0u16..30, any::<u8>(), 0u16..400).prop_map(
+            |(n, radius, opacity, duration_ms)| {
+                let style = if radius == 0 {
+                    Style::default()
+                } else {
+                    Style::default()
+                        .with_radius(radius)
+                        .with_opacity(opacity)
+                        .with_transition(Transition {
+                            curve: Curve::EaseInOut,
+                            duration_ms,
+                        })
+                };
+                Event::StyleChanged { id: w(n), style }
+            }
+        ),
         // Insets up to 90 pixels leave room for the windows on the smallest screen.
         ((0u32..4), (0u32..90), (0u32..90), (0u32..90), (0u32..90)).prop_map(
             |(output, left, top, right, bottom)| Event::ReservedChanged {
@@ -1183,4 +1200,68 @@ fn fullscreen_shows_up_in_the_diff_before_the_move() {
     replay(&mut engine, [reserve(0, 0, 30, 0, 0)]);
     // The window is fullscreen, so the bar does not move it.
     assert!(diff(&scene(&engine), &scene(&engine)).is_empty());
+}
+
+fn styled(raw: u64, style: Style) -> Event {
+    Event::StyleChanged { id: w(raw), style }
+}
+
+#[test]
+fn a_style_set_through_an_event_reaches_the_scene_and_the_diff() {
+    let mut engine = engine();
+    replay(&mut engine, [screen(1000, 600), open(1)]);
+    let before = scene(&engine);
+
+    let style = Style::default()
+        .with_radius(10)
+        .with_transition(Transition {
+            curve: Curve::EaseOut,
+            duration_ms: 150,
+        });
+    replay(&mut engine, [styled(1, style)]);
+    let after = scene(&engine);
+    assert_eq!(after.style_of(w(1)), style);
+    assert_eq!(diff(&before, &after), [Change::Style { id: w(1), style }]);
+
+    replay(&mut engine, [styled(1, Style::default())]);
+    assert_eq!(scene(&engine), before);
+}
+
+#[test]
+fn a_style_for_an_unknown_window_is_ignored_and_does_not_linger() {
+    let mut engine = engine();
+    replay(
+        &mut engine,
+        [
+            screen(1000, 600),
+            styled(7, Style::default().with_radius(5)),
+        ],
+    );
+    replay(&mut engine, [open(7)]);
+    assert_eq!(scene(&engine).style_of(w(7)), Style::default());
+}
+
+#[test]
+fn a_closed_window_loses_its_style() {
+    let mut engine = engine();
+    let style = Style::default().with_opacity(100);
+    replay(&mut engine, [screen(1000, 600), open(1), styled(1, style)]);
+
+    // The id comes back as a new window, which must not inherit the old look.
+    replay(&mut engine, [Event::WindowClosed(w(1)), open(1)]);
+    assert_eq!(scene(&engine).style_of(w(1)), Style::default());
+}
+
+#[test]
+fn a_hidden_window_keeps_its_style_for_when_it_returns() {
+    let mut engine = bound_engine();
+    let shift = Modifiers::SUPER | Modifiers::SHIFT;
+    let style = Style::default().with_radius(9);
+    replay(&mut engine, [screen(1000, 600), open(1), styled(1, style)]);
+
+    engine.handle(pressed('2', shift));
+    assert!(scene(&engine).placements().is_empty());
+
+    engine.handle(pressed('2', Modifiers::SUPER));
+    assert_eq!(scene(&engine).style_of(w(1)), style);
 }
