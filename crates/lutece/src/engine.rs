@@ -104,6 +104,30 @@ impl Engine {
         self
     }
 
+    /// Changes the keymap and the manage hook of a running engine, so a configuration
+    /// can be reloaded without losing the windows. Only these two can change: the
+    /// workspaces, the layouts and the rules are state that windows already live in, so
+    /// changing them is left to whoever builds a new engine.
+    ///
+    /// Requests the manage hook has not been answered for stay open and can still be
+    /// answered after the hook is turned off. The caller must ask the backend to grab
+    /// [`grabs`](Engine::grabs) again, since the keys may differ.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lutece::{Engine, Keymap, Layout, StackSet, Tag};
+    ///
+    /// let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, Layout::default());
+    /// assert_eq!(engine.grabs().count(), 0);
+    /// engine.reconfigure(Keymap::new(), true);
+    /// # Ok::<(), lutece::Error>(())
+    /// ```
+    pub fn reconfigure(&mut self, keymap: Keymap, manage_hook: bool) {
+        self.keymap = keymap;
+        self.manage_hook = manage_hook;
+    }
+
     /// Uses `rules` to decide how newly opened windows are managed. Without any, every
     /// window opens on the current workspace.
     ///

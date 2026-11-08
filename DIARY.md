@@ -1614,3 +1614,15 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### Reconfiguring a running engine
+
+- **Why:** the window manager's reload must change keys and the manage hook without rebuilding the engine, which would lose its windows. The engine could only be configured when built.
+- **Choice (reload COA B):** one method, `reconfigure(keymap, manage_hook)`, and nothing more. Workspaces, layouts and rules are state that windows live in, so changing them stays with whoever builds a new engine. It is not an event: the log records events, and the window manager records the reload itself.
+- **Tests:** four integration tests (the new keys work and the old stop, the hook on and off, an open request stays pending) and two property tests (a reload never moves a window or the scene; reloading the same configuration leaves the engine equal).
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

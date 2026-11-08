@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Engine::reconfigure(keymap, manage_hook)`: changes the keys and the manage hook of a running engine, so a configuration can be reloaded without losing windows; workspaces, layouts and rules stay as built.
 - Window style is drawn by the nested Wayland backend: rounded corners (a GLES texture shader that replaces the default for the window's own draw calls), a border (a ring drawn by a pixel shader) and opacity. `Change::Move` animates over the style's transition (`Curve` and duration): the client gets its final size at once and is drawn scaled between the old and the new rectangle, and a move that starts while another is going begins from where the window is drawn.
 - Manage hook: `Engine::with_manage_hook`, `Effect::ManageRequested`, `Event::ManageDecided`, `ManageDecision` (move to a workspace, float or tile, focus) and `Engine::pending_manage_requests`. The window is placed by the rules at once and the decision moves it afterwards; the engine never waits.
 - External layout: `Layout::External`, `Effect::LayoutRequested`, `Event::LayoutProvided`, `Action::ToggleExternalLayout` and `Engine::pending_layout_requests`. A workspace with it asks for the rectangles of its tiled windows and shows the default layout until an answer that names each window once and stays inside the area arrives; a stale, wrong or missing answer costs only the look of that workspace, and the engine never waits.
