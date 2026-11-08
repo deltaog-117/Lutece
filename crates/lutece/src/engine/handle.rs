@@ -38,7 +38,18 @@ impl Engine {
         let mut effects = Vec::new();
         match event {
             Event::WindowOpened { id, info } => self.open(id, &info, &mut effects),
+            Event::ManageDecided { serial, decision } => {
+                if let Some((id, _)) = self.manage_pending.remove(&serial) {
+                    self.stacks.decide(
+                        id,
+                        decision.tag.as_ref(),
+                        decision.floating,
+                        decision.focus,
+                    );
+                }
+            }
             Event::WindowClosed(id) => {
+                self.manage_pending.retain(|_, (window, _)| *window != id);
                 // Already gone: nothing left to remove.
                 let _ = self.stacks.remove(id);
                 self.styles.remove(&id);
@@ -93,6 +104,42 @@ impl Engine {
     }
 
     fn open(&mut self, id: WinId, info: &WindowInfo, effects: &mut Vec<Effect>) {
+        let was_managed = self.stacks.contains(id);
+        self.place(id, info, effects);
+        if !self.manage_hook || was_managed {
+            return;
+        }
+        if let Some(tag) = self.stacks.tag_of(id).cloned() {
+            let serial = self.next_serial;
+            self.next_serial = self.next_serial.wrapping_add(1);
+            self.manage_pending.insert(serial, (id, info.clone()));
+            effects.push(Effect::ManageRequested {
+                serial,
+                id,
+                info: info.clone(),
+                tag,
+            });
+        }
+    }
+
+    /// The manage requests nobody has answered, oldest first, for a plugin that connects
+    /// late (see [`Engine::pending_layout_requests`]).
+    #[must_use]
+    pub fn pending_manage_requests(&self) -> Vec<Effect> {
+        self.manage_pending
+            .iter()
+            .filter_map(|(serial, (id, info))| {
+                Some(Effect::ManageRequested {
+                    serial: *serial,
+                    id: *id,
+                    info: info.clone(),
+                    tag: self.stacks.tag_of(*id)?.clone(),
+                })
+            })
+            .collect()
+    }
+
+    fn place(&mut self, id: WinId, info: &WindowInfo, effects: &mut Vec<Effect>) {
         // A window that is already managed stays where it is, whatever the rules say.
         match self.rules.outcome_for(info) {
             None => {

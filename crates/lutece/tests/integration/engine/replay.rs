@@ -2,8 +2,9 @@
 
 use lutece::{
     Action, Change, Curve, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap,
-    Keysym, Layout, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Placement, Rect,
-    Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId, WindowInfo, diff,
+    Keysym, Layout, ManageDecision, ManageRule, Match, Modifiers, Outcome, Output, OutputId,
+    Placement, Rect, Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId,
+    WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -1568,4 +1569,188 @@ fn the_unanswered_requests_can_be_asked_for_again() {
     engine.handle(column_answer(serial, &windows, area));
 
     assert!(engine.pending_layout_requests().is_empty());
+}
+
+fn manage_engine() -> Engine {
+    let mut engine = engine().with_manage_hook(true);
+    engine.handle(screen(1000, 600));
+    engine
+}
+
+fn manage_requests(effects: &[Effect]) -> Vec<(u64, WinId, String)> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::ManageRequested {
+                serial, id, tag, ..
+            } => Some((*serial, *id, tag.as_str().to_owned())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_new_window_is_offered_to_the_hook_after_the_rules_placed_it() {
+    let mut engine = manage_engine();
+
+    let first = manage_requests(&engine.handle(open(1)));
+    let again = manage_requests(&engine.handle(open(1)));
+
+    assert_eq!(first.len(), 1);
+    assert_eq!((first[0].1, first[0].2.as_str()), (w(1), "1"));
+    assert!(
+        again.is_empty(),
+        "a window already managed is not asked about twice"
+    );
+    assert_eq!(ids(&scene(&engine)), [1]);
+}
+
+#[test]
+fn without_the_hook_nothing_is_asked() {
+    let mut engine = engine();
+    engine.handle(screen(1000, 600));
+
+    assert!(manage_requests(&engine.handle(open(1))).is_empty());
+}
+
+#[test]
+fn a_decision_moves_floats_and_focuses_the_window() {
+    let mut engine = manage_engine();
+    let (serial, _, _) = manage_requests(&engine.handle(open(1))).remove(0);
+    engine.handle(open(2));
+
+    engine.handle(Event::ManageDecided {
+        serial,
+        decision: ManageDecision {
+            tag: Some(tag("2")),
+            floating: Some(true),
+            focus: false,
+        },
+    });
+
+    assert_eq!(engine.stacks().tag_of(w(1)).map(Tag::as_str), Some("2"));
+    assert!(
+        engine
+            .stacks()
+            .workspaces()
+            .any(|ws| ws.tag().as_str() == "2" && ws.is_floating(w(1)))
+    );
+    assert_eq!(
+        ids(&scene(&engine)),
+        [2],
+        "the window left the shown workspace"
+    );
+
+    let (serial, _, _) = manage_requests(&engine.handle(open(3))).remove(0);
+    engine.handle(Event::ManageDecided {
+        serial,
+        decision: ManageDecision {
+            tag: Some(tag("2")),
+            floating: None,
+            focus: true,
+        },
+    });
+    assert_eq!(engine.stacks().current().tag().as_str(), "2");
+    assert_eq!(scene(&engine).focus(), Some(w(3)));
+}
+
+#[test]
+fn a_decision_keeps_what_it_leaves_out() {
+    let mut engine = manage_engine();
+    let (serial, _, _) = manage_requests(&engine.handle(open(1))).remove(0);
+    engine.handle(Event::ActionRequested(Action::ToggleFloat));
+    let before = engine.clone();
+
+    engine.handle(Event::ManageDecided {
+        serial,
+        decision: ManageDecision::default(),
+    });
+
+    // Only the answered request is gone from the engine's record of them.
+    assert_eq!(engine.stacks(), before.stacks());
+    assert!(engine.pending_manage_requests().is_empty());
+}
+
+#[test]
+fn a_decision_that_does_not_apply_changes_nothing() {
+    let mut engine = manage_engine();
+    let (serial, _, _) = manage_requests(&engine.handle(open(1))).remove(0);
+    let stacks = engine.stacks().clone();
+
+    let unknown_tag = Event::ManageDecided {
+        serial,
+        decision: ManageDecision {
+            tag: Some(tag("nope")),
+            ..ManageDecision::default()
+        },
+    };
+    engine.handle(unknown_tag.clone());
+    assert_eq!(engine.stacks(), &stacks);
+
+    // The request was consumed: answering again, or with an unknown serial, does nothing.
+    engine.handle(unknown_tag);
+    engine.handle(Event::ManageDecided {
+        serial: 9999,
+        decision: ManageDecision {
+            tag: Some(tag("2")),
+            ..ManageDecision::default()
+        },
+    });
+    assert_eq!(engine.stacks(), &stacks);
+}
+
+#[test]
+fn a_window_that_closed_cannot_be_decided_about() {
+    let mut engine = manage_engine();
+    let (serial, _, _) = manage_requests(&engine.handle(open(1))).remove(0);
+    engine.handle(Event::WindowClosed(w(1)));
+    assert!(engine.pending_manage_requests().is_empty());
+
+    engine.handle(Event::ManageDecided {
+        serial,
+        decision: ManageDecision {
+            tag: Some(tag("2")),
+            ..ManageDecision::default()
+        },
+    });
+
+    assert!(engine.stacks().workspaces().all(|ws| ws.is_empty()));
+}
+
+#[test]
+fn unanswered_manage_requests_can_be_asked_for_again() {
+    let mut engine = manage_engine();
+    engine.handle(open(1));
+    let (serial, _, _) = manage_requests(&engine.handle(open(2))).remove(0);
+
+    let pending = manage_requests(&engine.pending_manage_requests());
+
+    assert_eq!(pending.len(), 2);
+    assert_eq!(pending[1].0, serial);
+}
+
+#[test]
+fn a_replayed_session_with_manage_decisions_ends_in_the_same_state() {
+    let mut live = manage_engine();
+    let mut log = vec![screen(1000, 600)];
+    for event in [open(1), open(2)] {
+        log.push(event.clone());
+        for (serial, id, _) in manage_requests(&live.handle(event)) {
+            let decision = Event::ManageDecided {
+                serial,
+                decision: ManageDecision {
+                    tag: Some(tag(if id == w(1) { "2" } else { "1" })),
+                    floating: Some(id == w(2)),
+                    focus: false,
+                },
+            };
+            log.push(decision.clone());
+            live.handle(decision);
+        }
+    }
+
+    let mut rebuilt = engine().with_manage_hook(true);
+    replay(&mut rebuilt, log);
+
+    assert_eq!(rebuilt, live);
 }

@@ -5,7 +5,7 @@ use crate::shared::contracts::scene::Placement;
 use crate::shared::contracts::style::Style;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::{Insets, Rect};
-use crate::shared::ids::{OutputId, WinId};
+use crate::shared::ids::{OutputId, Tag, WinId};
 use std::ops::BitOr;
 
 /// Something a backend tells the core about. Only events with the same meaning on X11
@@ -78,6 +78,16 @@ pub enum Event {
     /// The engine runs it as it runs a bound key, so the request is an event like any
     /// other and a recorded session replays it.
     ActionRequested(Action),
+    /// The answer to an [`Effect::ManageRequested`](crate::Effect::ManageRequested): where
+    /// the new window should go instead of where the rules put it. Used only if `serial`
+    /// is still outstanding and the window is still managed; the window was already shown
+    /// where the rules put it, so a decision moves it, and a missing one costs nothing.
+    ManageDecided {
+        /// The request being answered.
+        serial: u64,
+        /// What to do with the window.
+        decision: ManageDecision,
+    },
     /// The answer to a [`Effect::LayoutRequested`](crate::Effect::LayoutRequested): where
     /// each window goes, bottom to top. An answer is used only if it names the request
     /// still outstanding for its workspace, lists exactly the windows asked about once
@@ -89,6 +99,19 @@ pub enum Event {
         /// The windows and their rectangles.
         placements: Vec<Placement>,
     },
+}
+
+/// What a plugin decided for a new window. Every part is optional: leaving one out leaves
+/// what the rules did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ManageDecision {
+    /// Move the window to the workspace with this tag. A tag nobody has is ignored.
+    pub tag: Option<Tag>,
+    /// `Some(true)` floats the window, `Some(false)` tiles it.
+    pub floating: Option<bool>,
+    /// Go to the window's workspace and give it the focus.
+    pub focus: bool,
 }
 
 /// Window details a layout or rule may need.

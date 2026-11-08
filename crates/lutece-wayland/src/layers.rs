@@ -96,7 +96,7 @@ impl State {
                         surface: popup.wl_surface().clone(),
                         origin: root + location - popup.geometry().loc,
                         popup: true,
-                        clip: None,
+                        look: None,
                     })
                     .collect::<Vec<_>>();
                 found.extend(popups.into_iter().rev());
@@ -105,7 +105,7 @@ impl State {
                     surface: surface.wl_surface().clone(),
                     origin: root,
                     popup: false,
-                    clip: None,
+                    look: None,
                 });
             }
         }

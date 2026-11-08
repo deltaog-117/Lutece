@@ -10,7 +10,8 @@
 //! place themselves and are never managed: they are drawn above everything, where their
 //! program put them.
 
-use lutece::{Rect, WinId};
+use crate::animation::Animation;
+use lutece::{Rect, Style, WinId};
 use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
@@ -18,6 +19,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
 use smithay::xwayland::X11Surface;
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// The client behind a window: a Wayland toplevel, or an X11 window of Xwayland.
 #[derive(Debug, Clone)]
@@ -53,6 +55,22 @@ pub(crate) struct Entry {
     pub(crate) rect: Option<Rect>,
     /// Whether the client has been told it is fullscreen.
     pub(crate) fullscreen: bool,
+    /// The look the core gave the window.
+    pub(crate) style: Style,
+    /// The window on its way to `rect`, while it moves with a transition.
+    pub(crate) animation: Option<Animation>,
+}
+
+impl Entry {
+    /// The rectangle to draw at `now`: where the window is on its way to, or the rectangle
+    /// it has reached. `None` while it is hidden.
+    pub(crate) fn drawn_rect(&self, now: Instant) -> Option<Rect> {
+        let target = self.rect?;
+        Some(match &self.animation {
+            Some(animation) if !animation.finished(now) => animation.rect_at(now),
+            _ => target,
+        })
+    }
 }
 
 /// One surface tree that is on screen: a window, or a popup that belongs to one.
@@ -64,9 +82,18 @@ pub(crate) struct Layer {
     /// Where the surface's own origin is on the output.
     pub(crate) origin: Point<i32, Logical>,
     pub(crate) popup: bool,
-    /// The area of the output the surface may paint on, `None` for no limit. A window
-    /// is held to the rectangle the core gave it; a popup may reach past its window.
-    pub(crate) clip: Option<Rectangle<i32, Logical>>,
+    /// How a window's own surface is drawn: its style, and where it is drawn compared with
+    /// where the core placed it. `None` for popups, menus and layer surfaces.
+    pub(crate) look: Option<Look>,
+}
+
+/// The look of a placed window's surface.
+pub(crate) struct Look {
+    pub(crate) style: Style,
+    /// The rectangle the core gave the window, which its client sized itself to.
+    pub(crate) target: Rectangle<i32, Logical>,
+    /// The rectangle the window is drawn in now, which differs from `target` while it moves.
+    pub(crate) drawn: Rectangle<i32, Logical>,
 }
 
 /// Every toplevel this backend knows about.
@@ -118,6 +145,8 @@ impl Windows {
                 shell,
                 rect: None,
                 fullscreen: false,
+                style: Style::default(),
+                animation: None,
             },
         );
         id
@@ -315,7 +344,7 @@ impl Windows {
                     surface: window.wl_surface()?,
                     origin: window.geometry().loc,
                     popup: true,
-                    clip: None,
+                    look: None,
                 })
             })
             .collect()
@@ -325,22 +354,26 @@ impl Windows {
     /// the stack down: for each, its popups (the newest first) and then the window itself.
     /// A hidden window has no rectangle and has no layers.
     pub(crate) fn window_layers(&self, fullscreen: bool) -> Vec<Layer> {
+        let now = Instant::now();
         self.order
             .iter()
             .rev()
             .filter_map(|id| Some((*id, self.managed.get(id)?)))
             .filter(|(_, entry)| entry.fullscreen == fullscreen)
             .filter_map(|(id, entry)| Some((id, entry, entry.rect?)))
-            .flat_map(|(id, entry, rect)| window_layers(id, entry, rect))
+            .flat_map(|(id, entry, rect)| window_layers(id, entry, rect, now))
             .collect()
     }
 }
 
 /// The layers of one placed window, front to back.
-fn window_layers(id: WinId, entry: &Entry, rect: Rect) -> Vec<Layer> {
+fn window_layers(id: WinId, entry: &Entry, target: Rect, now: Instant) -> Vec<Layer> {
     let Some(root) = entry.shell.wl_surface() else {
         return Vec::new();
     };
+    // While the window moves it is drawn between its old and new rectangles; its client has
+    // already been told the new size and is drawn scaled to fit.
+    let rect = entry.drawn_rect(now).unwrap_or(target);
     let origin = Point::from((rect.x(), rect.y()));
     // The rectangle is for the window proper; a client that draws a shadow or a title bar
     // around it declares where the window starts inside its surface. An X11 window is
@@ -355,7 +388,7 @@ fn window_layers(id: WinId, entry: &Entry, rect: Rect) -> Vec<Layer> {
             surface: popup.wl_surface().clone(),
             origin: origin + location - popup.geometry().loc,
             popup: true,
-            clip: None,
+            look: None,
         })
         .collect();
     layers.reverse();
@@ -364,7 +397,11 @@ fn window_layers(id: WinId, entry: &Entry, rect: Rect) -> Vec<Layer> {
         surface: root,
         origin: surface_origin,
         popup: false,
-        clip: Some(placed_area(rect)),
+        look: Some(Look {
+            style: entry.style,
+            target: placed_area(target),
+            drawn: placed_area(rect),
+        }),
     });
     layers
 }

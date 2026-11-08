@@ -22,6 +22,7 @@
 //! }
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+mod animation;
 mod apply;
 mod backend;
 mod compositor;
@@ -30,6 +31,7 @@ mod error;
 mod focus;
 mod input;
 mod layers;
+mod look;
 mod nested;
 mod pointer;
 mod popup;

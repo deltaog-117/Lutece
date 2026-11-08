@@ -4,6 +4,7 @@
 //! a window means telling its client the size it should have; where it sits on screen
 //! is the renderer's business, and a hidden window is simply not drawn.
 
+use crate::animation::Animation;
 use crate::compositor::{State, set_activated};
 use crate::error::{Error, Result};
 use crate::windows::{Entry, Shell};
@@ -12,6 +13,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::Rectangle;
 use std::ffi::OsStr;
 use std::process::Command;
+use std::time::Instant;
 
 /// Whether the window manager should keep running after effects were applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +52,14 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
                     restack_x11 = true;
                 }
             }
-            Change::Show(placement) | Change::Move(placement) => place(state, placement),
+            Change::Style { id, style } => {
+                if let Some(entry) = state.windows.get_mut(*id) {
+                    entry.style = *style;
+                }
+            }
+            // A window that appears is not animated in; one that moves glides.
+            Change::Show(placement) => place(state, placement, false),
+            Change::Move(placement) => place(state, placement, true),
             Change::Restack(order) => {
                 state.windows.restack(order);
                 restack_x11 = true;
@@ -97,12 +106,20 @@ fn set_fullscreen(entry: &mut Entry, on: bool) -> bool {
     true
 }
 
-fn place(state: &mut State, placement: &Placement) {
+fn place(state: &mut State, placement: &Placement, animate: bool) {
     let Some(entry) = state.windows.get_mut(placement.id) else {
         // The client is gone; the core learns of it from its own close event.
         return;
     };
+    // A move that comes while another is still going starts from where the window is drawn
+    // now, so the window never jumps.
+    let now = Instant::now();
+    let from = entry.drawn_rect(now);
     entry.rect = Some(placement.rect);
+    entry.animation = from
+        .filter(|from| animate && *from != placement.rect)
+        .filter(|_| entry.style.transition().duration_ms > 0)
+        .map(|from| Animation::new(from, placement.rect, now, entry.style.transition()));
     let size = (
         to_protocol(placement.rect.width()),
         to_protocol(placement.rect.height()),

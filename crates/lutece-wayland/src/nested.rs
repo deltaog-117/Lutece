@@ -9,6 +9,7 @@ use crate::backend::WaylandBackend;
 use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
 use crate::input;
+use crate::look::Shaders;
 use crate::scale::Scale;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -44,6 +45,8 @@ pub struct NestedBackend {
     scale: Scale,
     /// The cursor last given to the window, so it is changed only when it differs.
     shown_cursor: Option<CursorImageStatus>,
+    /// The shaders that draw windows' corners and borders.
+    shaders: Shaders,
 }
 
 impl NestedBackend {
@@ -76,6 +79,7 @@ impl NestedBackend {
         let mut wayland = WaylandBackend::bind(size)?;
         wayland.set_scale(scale);
         wayland.set_outputs(&split(size, outputs));
+        let shaders = Shaders::compile(graphics.renderer()).map_err(render_error)?;
         if let Some(support) = DmabufSupport::of(graphics.renderer()) {
             wayland.enable_dmabuf(&support)?;
         }
@@ -88,6 +92,7 @@ impl NestedBackend {
             outputs,
             scale,
             shown_cursor: None,
+            shaders,
         })
     }
 
@@ -200,7 +205,11 @@ impl NestedBackend {
         {
             let (renderer, mut framebuffer) = self.graphics.bind().map_err(render_error)?;
             let mut elements = self.wayland.cursor_elements(renderer);
-            elements.extend(self.wayland.surface_elements(renderer));
+            // The frame is drawn flipped, which turns the framebuffer's y axis over.
+            elements.extend(
+                self.wayland
+                    .surface_elements(renderer, &self.shaders, size, true),
+            );
             // The winit framebuffer has its origin at the bottom: drawn as is, the whole
             // picture comes out upside down (seen when the nested window was first looked at).
             let mut frame = renderer

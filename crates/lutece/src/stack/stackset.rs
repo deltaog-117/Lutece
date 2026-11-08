@@ -253,6 +253,41 @@ impl StackSet {
         }
     }
 
+    /// Applies a plugin's decision for `id`: moves it to the workspace `tag` (a tag nobody
+    /// has leaves it where it is), floats or tiles it, and focuses it if `focus`. A window
+    /// that is not managed is ignored.
+    pub(crate) fn decide(
+        &mut self,
+        id: WinId,
+        tag: Option<&Tag>,
+        floating: Option<bool>,
+        focus: bool,
+    ) {
+        let Some(workspace) = self.workspaces().find(|w| w.contains(id)) else {
+            return;
+        };
+        let was_floating = workspace.is_floating(id);
+        let moved = match tag {
+            Some(tag) if workspace.tag() != tag && self.tags().any(|known| known == tag) => {
+                // Removing and inserting again is the one way to change workspace; the
+                // float state is put back below, since it belongs to the window.
+                let _ = self.remove(id);
+                let _ = self.insert_on(id, tag);
+                true
+            }
+            _ => false,
+        };
+        let float = floating.unwrap_or(was_floating);
+        if (moved || floating.is_some())
+            && let Some(workspace) = self.workspaces_mut().find(|w| w.contains(id))
+        {
+            workspace.set_float(id, float.then(Float::default));
+        }
+        if focus {
+            let _ = self.focus_window(id);
+        }
+    }
+
     /// Removes a window from whichever workspace holds it.
     ///
     /// # Errors

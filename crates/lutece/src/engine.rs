@@ -58,6 +58,11 @@ pub struct Engine {
     styles: HashMap<WinId, Style>,
     /// The external layout of each workspace that has used it.
     external: external::Slots,
+    /// Whether a new window is offered to the manage hook.
+    manage_hook: bool,
+    /// The manage requests nobody has answered, by serial.
+    manage_pending:
+        std::collections::BTreeMap<u64, (WinId, crate::shared::contracts::event::WindowInfo)>,
     /// The serial of the next layout request. Part of the state, so a replay numbers its
     /// requests the same way.
     next_serial: u64,
@@ -75,9 +80,21 @@ impl Engine {
             outputs: Vec::new(),
             reserved: HashMap::new(),
             styles: HashMap::new(),
+            manage_hook: false,
+            manage_pending: std::collections::BTreeMap::new(),
             external: external::Slots::new(),
             next_serial: 0,
         }
+    }
+
+    /// Offers every new window to a plugin: the engine asks with
+    /// [`Effect::ManageRequested`](crate::Effect::ManageRequested) and applies the answer
+    /// [`Event::ManageDecided`](crate::Event::ManageDecided). The window is placed by the
+    /// rules at once; the engine does not wait.
+    #[must_use]
+    pub fn with_manage_hook(mut self, on: bool) -> Self {
+        self.manage_hook = on;
+        self
     }
 
     /// Uses `keymap` for key presses. Without one, key presses do nothing.

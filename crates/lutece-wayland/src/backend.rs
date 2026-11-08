@@ -13,7 +13,7 @@ use lutece::{
 };
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use smithay::backend::input::{KeyState, Keycode};
-use smithay::backend::renderer::{ImportAll, Renderer};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::output::{
     Mode, Output as WlOutput, PhysicalProperties, Scale as OutputScale, Subpixel,
@@ -356,20 +356,25 @@ impl WaylandBackend {
     }
 
     /// What to draw for the managed windows, front to back.
-    pub(crate) fn surface_elements<R>(&self, renderer: &mut R) -> Vec<SceneElement<R>>
-    where
-        R: Renderer + ImportAll,
-        R::TextureId: Clone + 'static,
-    {
-        crate::render::surface_elements(&self.state.layers(), renderer, self.state.scale)
+    pub(crate) fn surface_elements(
+        &self,
+        renderer: &mut GlesRenderer,
+        shaders: &crate::look::Shaders,
+        frame: smithay::utils::Size<i32, smithay::utils::Physical>,
+        flipped: bool,
+    ) -> Vec<SceneElement> {
+        crate::render::surface_elements(
+            &self.state.layers(),
+            renderer,
+            self.state.scale,
+            shaders,
+            frame,
+            flipped,
+        )
     }
 
     /// What to draw for a cursor image a client supplied, if it did.
-    pub(crate) fn cursor_elements<R>(&self, renderer: &mut R) -> Vec<SceneElement<R>>
-    where
-        R: Renderer + ImportAll,
-        R::TextureId: Clone + 'static,
-    {
+    pub(crate) fn cursor_elements(&self, renderer: &mut GlesRenderer) -> Vec<SceneElement> {
         crate::render::cursor_elements(
             &self.state.pointer.cursor,
             self.state.pointer.location,

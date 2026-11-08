@@ -17,7 +17,9 @@ pub use input::{Action, Direction, Keymap};
 pub use layout::{Layout, MasterRatio};
 pub use rules::{ManageRule, Match, Outcome, Rules};
 pub use shared::contracts::effect::{Effect, SpawnCommand};
-pub use shared::contracts::event::{Event, KeyPress, Keysym, Modifiers, Output, WindowInfo};
+pub use shared::contracts::event::{
+    Event, KeyPress, Keysym, ManageDecision, Modifiers, Output, WindowInfo,
+};
 pub use shared::contracts::scene::{Placement, Scene};
 pub use shared::contracts::scene_diff::{Change, diff};
 pub use shared::contracts::style::{Border, Curve, Rgba, Style, Transition};

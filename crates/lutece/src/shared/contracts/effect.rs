@@ -3,6 +3,7 @@
 //! Window placement and focus are not effects: they travel in the
 //! [`Scene`](super::scene::Scene), so a backend only reconciles what changed.
 
+use crate::shared::contracts::event::WindowInfo;
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::Rect;
 use crate::shared::ids::{Tag, WinId};
@@ -21,6 +22,20 @@ pub enum Effect {
     Release(WinId),
     /// Stop the window manager.
     Quit,
+    /// Ask whatever provides the manage hook where the new window `id` should go. It was
+    /// already placed, on the workspace `tag`, by the rules. The answer is
+    /// [`Event::ManageDecided`](crate::Event::ManageDecided) with the same `serial`; none is
+    /// needed, and the window stays where it is.
+    ManageRequested {
+        /// Names this request in the answer.
+        serial: u64,
+        /// The new window.
+        id: WinId,
+        /// What is known about it.
+        info: WindowInfo,
+        /// The workspace the rules put it on.
+        tag: Tag,
+    },
     /// Ask whatever provides the external layout where `windows` go on the workspace
     /// `tag`, which shows `area`. The answer is [`Event::LayoutProvided`](crate::Event::LayoutProvided)
     /// carrying the same `serial`; until it comes the workspace uses the default layout,

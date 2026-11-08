@@ -1585,3 +1585,19 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### Window style drawn, animated moves, and the manage hook
+
+- **Style (COA 1A):** corners are cut by a texture shader that replaces the renderer's default for one window's draw calls (`override_default_tex_program`, cleared right after so it cannot leak to the next element); the border is a ring drawn by a pixel shader around the window, grown by its width; opacity is the surface alpha. All three are tied to the GLES renderer, so the render path is no longer generic over the renderer. Chosen over square borders with no radius (a dead field) and an offscreen pass per window (an extra pass nothing needs until blur).
+- **Animation (COA 2A):** the core still only says where a window starts and ends. The backend keeps an `Animation` (old rectangle, new rectangle, start, transition) per window and draws the window at the curve's blend; the client was configured at the final size at once, so its surface is scaled about the drawn origin to fit. A move that starts mid-animation begins from where the window is drawn, so a window never jumps. A window that appears is not animated in. The curves, the blend and the clamping are pure and property-tested (every curve runs 0 to 1 without going back; the drawn rectangle stays between the two and never collapses).
+- **Found by looking, twice:** the first styled screenshot showed the two right-hand windows empty except a thin strip: the corner shader measured y from the wrong end, so a window was cut by its own mirror image (the full-height master was symmetric and looked fine). Fixed by turning gl_FragCoord's y over for the flipped frame; the next screenshot showed all three windows whole, with rounded corners and borders, and a mid-move screenshot showed the windows scaled and overlapping on their way.
+- **Not verified:** the shader was only seen at scale 1 and at one radius; the opacity (0.92) is not distinguishable by eye on a dark terminal; the pointer was moved over the nested window once with the host's own tools and the focus did not change, but the nested window was by then covered by another window (see below), so pointer focus on a live window was not confirmed. The pointer is covered by the scripted-client tests that run in the check.
+- **Known fault, found while looking:** when the host's own compositor puts another window over the nested one, the buffer swap waits for a frame callback that is never sent, so the loop stops: events, commands and plugin supervision wait until the window is visible again, and the host shows "Application Not Responding" dialogs (two are still open on the screen this was tried on, and need a click on Wait or Terminate). It is on the roadmap. It is also a reminder that the nested backend is for development.
+- **Manage hook (COA 5A):** `Effect::ManageRequested { serial, id, info, tag }` and `Event::ManageDecided { serial, decision }` with a `ManageDecision` whose every part is optional. The window is placed by the rules first; a decision then moves it with `StackSet::decide` (remove and insert again for a workspace change, with the float state kept unless the decision sets it). Only the first answer to a serial counts, a window that closes takes its pending request with it, and a tag nobody has changes nothing. Pending requests are kept for a plugin that connects late, as for layouts.
+- **Tests:** 12 in the engine (the hook only when enabled, a decision applied, parts left out left alone, a decision that does not apply, a closed window, a replay with decisions equal to the live engine) and 9 for the drawing helpers and animation.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |
