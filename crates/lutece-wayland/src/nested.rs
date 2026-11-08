@@ -12,6 +12,7 @@ use crate::input;
 use crate::look::Shaders;
 use crate::scale::Scale;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
+use smithay::backend::egl::ffi;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
@@ -47,6 +48,8 @@ pub struct NestedBackend {
     shown_cursor: Option<CursorImageStatus>,
     /// The shaders that draw windows' corners and borders.
     shaders: Shaders,
+    /// Whether the swap interval was set; see [`set_swap_interval`].
+    unthrottled: bool,
 }
 
 impl NestedBackend {
@@ -93,6 +96,7 @@ impl NestedBackend {
             scale,
             shown_cursor: None,
             shaders,
+            unthrottled: false,
         })
     }
 
@@ -204,6 +208,10 @@ impl NestedBackend {
         let whole = [Rectangle::from_size(size)];
         {
             let (renderer, mut framebuffer) = self.graphics.bind().map_err(render_error)?;
+            if !self.unthrottled {
+                set_swap_interval(renderer)?;
+                self.unthrottled = true;
+            }
             let mut elements = self.wayland.cursor_elements(renderer);
             // The frame is drawn flipped, which turns the framebuffer's y axis over.
             elements.extend(
@@ -292,6 +300,25 @@ fn size_of(
 ) -> Result<Size> {
     let positive = |length: i32| u32::try_from(scale.to_logical(length)).unwrap_or(0);
     Ok(Size::new(positive(size.w), positive(size.h))?)
+}
+
+/// Makes swapping buffers return at once instead of waiting for the host's frame
+/// callback. The host sends none to a window it does not show, so waiting would stop the
+/// whole loop (events, commands, plugin supervision) while another window covers this
+/// one. The loop is paced by [`WAIT_SLICE`], so drawing does not spin.
+///
+/// The window's surface must be current, which it is right after `bind`.
+#[allow(unsafe_code)]
+fn set_swap_interval(renderer: &GlesRenderer) -> Result<()> {
+    let display = renderer.egl_context().display().get_display_handle();
+    // SAFETY: `display` is the live EGL display this renderer was made from, held by the
+    // `Arc` for the whole call, and the window's surface is current on this thread.
+    let done = unsafe { ffi::egl::SwapInterval(display.handle, 0) };
+    if done == ffi::egl::TRUE {
+        Ok(())
+    } else {
+        Err(render_error("cannot set the swap interval"))
+    }
 }
 
 #[cfg(test)]

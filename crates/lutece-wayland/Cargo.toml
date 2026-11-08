@@ -5,8 +5,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
-[lints]
-workspace = true
+# Not the workspace table: one call into EGL has no safe wrapper, so `unsafe_code` is
+# `deny` here, and allowed only on that one call in `nested.rs`. Other crates stay `forbid`.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
 
 [dependencies]
 lutece = { path = "../lutece" }

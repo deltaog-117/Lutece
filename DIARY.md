@@ -1601,3 +1601,16 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### Nested window stall when covered
+
+- **Cause:** Smithay's winit backend never sets the swap interval, so Mesa's Wayland default of one applies and `eglSwapBuffers` waits for a frame callback. A host that covers the window sends none. Smithay 0.7 also drops winit's `Occluded` event, so "draw only while visible" could not be done.
+- **COA 1A:** set the interval to zero with one `eglSwapInterval` call on the first draw, with `unsafe_code` relaxed from `forbid` to `deny` for `lutece-wayland` alone and allowed on that one function with a SAFETY note. Rejected: `vblank_mode=0` in the launch scripts (stall returns without it), a swap thread (fragile), a swap-time guard (still freezes once).
+- **Rule change you approved:** `lutece-wayland` has its own `[lints.rust]` table instead of the workspace one; the other crates still forbid `unsafe`.
+- **Tested:** `scripts/check` passes, and the nested example opens, draws and runs for six seconds with no error. The window was not covered on purpose (the last time, that froze the real session), so the fix itself is **not** yet seen working. Drawing now returns at once, so the loop is paced only by the 8 ms wait slice.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |

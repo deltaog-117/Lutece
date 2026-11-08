@@ -146,6 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland` gives each Xwayland instance a display number from a process-wide counter instead of Smithay's lowest free one (the first is still the lowest free); `x11rb` 0.14 moves from the dev-dependencies to the dependencies
 
 ### Fixed
+- The nested Wayland window no longer stalls the whole loop while the host covers it: the swap interval is set to zero, so the buffer swap does not wait for a frame callback the host never sends.
 - The nested Wayland window drew everything upside down (found the first time it was looked at, with a bar and three terminals in it): the winit framebuffer has its origin at the bottom, so the frame is now drawn with `Transform::Flipped180`.
 - `lutece-wayland`: `_NET_ACTIVE_WINDOW` under Xwayland named the root or the window that had just lost the focus; it now names the X11 window that has the keyboard focus, and none when a Wayland surface has it
 - The X11 integration tests failed at random (about half of the runs) with `Connection reset by peer`: the private `Xvfb` restarted when the readiness probe closed the only connection it had, and the test client's own connection landed in the restart. The server now starts with `-noreset`
