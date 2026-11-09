@@ -10,6 +10,7 @@ use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
 use crate::input;
 use crate::look::Shaders;
+use crate::outline::{self, Outline};
 use crate::scale::Scale;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
 use smithay::backend::egl::ffi;
@@ -50,6 +51,8 @@ pub struct NestedBackend {
     shaders: Shaders,
     /// Whether the swap interval was set; see [`set_swap_interval`].
     unthrottled: bool,
+    /// Outlines drawn over the windows, first on top.
+    outlines: Vec<Outline>,
 }
 
 impl NestedBackend {
@@ -97,7 +100,15 @@ impl NestedBackend {
             shown_cursor: None,
             shaders,
             unthrottled: false,
+            outlines: Vec::new(),
         })
+    }
+
+    /// Sets the outlines drawn over the windows and the cursor's image, replacing the ones
+    /// before; an empty list takes them away. They are only drawn: no window moves and no
+    /// client is told.
+    pub fn set_outlines(&mut self, outlines: Vec<Outline>) {
+        self.outlines = outlines;
     }
 
     /// The name clients put in `WAYLAND_DISPLAY` to reach this compositor.
@@ -212,7 +223,9 @@ impl NestedBackend {
                 set_swap_interval(renderer)?;
                 self.unthrottled = true;
             }
-            let mut elements = self.wayland.cursor_elements(renderer);
+            // Front to back: outlines, then the cursor's image, then the windows.
+            let mut elements = outline::elements(&self.outlines, &self.shaders, self.scale);
+            elements.extend(self.wayland.cursor_elements(renderer));
             // The frame is drawn flipped, which turns the framebuffer's y axis over.
             elements.extend(
                 self.wayland
