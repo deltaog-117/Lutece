@@ -2,6 +2,7 @@
 
 use crate::shared::contracts::event::WindowInfo;
 use crate::shared::ids::Tag;
+use std::fmt;
 
 /// What a rule looks at. One criterion each, so a rule always tests something; to need
 /// two things, write two rules and order them.
@@ -23,6 +24,17 @@ impl Match {
             Self::Class(class) => info.class == *class,
             Self::Title(title) => info.title == *title,
             Self::Dialog => info.transient_for.is_some(),
+        }
+    }
+}
+
+impl fmt::Display for Match {
+    /// `class=firefox`, `title=...` or `dialog`, the way a person would write the criterion.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Class(class) => write!(f, "class={class}"),
+            Self::Title(title) => write!(f, "title={title}"),
+            Self::Dialog => f.write_str("dialog"),
         }
     }
 }
@@ -54,6 +66,18 @@ impl ManageRule {
     #[must_use]
     pub const fn new(when: Match, outcome: Outcome) -> Self {
         Self { when, outcome }
+    }
+
+    /// What this rule looks at.
+    #[must_use]
+    pub const fn when(&self) -> &Match {
+        &self.when
+    }
+
+    /// What this rule does to a window it matches.
+    #[must_use]
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
     }
 
     /// The outcome, or `None` if this rule does not match `info`.
@@ -101,6 +125,28 @@ impl Rules {
     #[must_use]
     pub fn outcome_for(&self, info: &WindowInfo) -> Option<&Outcome> {
         self.rules.iter().find_map(|rule| rule.outcome_for(info))
+    }
+
+    /// The first rule that matches `info` and its position (from 0), so a person can be told
+    /// which rule decided; `outcome_for` is this rule's outcome.
+    #[must_use]
+    pub fn matching(&self, info: &WindowInfo) -> Option<(usize, &ManageRule)> {
+        self.rules
+            .iter()
+            .enumerate()
+            .find(|(_, rule)| rule.outcome_for(info).is_some())
+    }
+
+    /// How many rules there are.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// Whether there are no rules.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
     }
 
     /// The tags the rules send windows to, in rule order.
@@ -175,7 +221,47 @@ mod tests {
         assert_eq!(rules.tags().collect::<Vec<_>>(), [&tag("3")]);
     }
 
+    #[test]
+    fn matching_names_the_first_rule_and_its_place() {
+        let mut rules = Rules::new();
+        rules.push(ManageRule::new(Match::Dialog, Outcome::Ignore));
+        rules.push(ManageRule::new(
+            Match::Class("Firefox".into()),
+            Outcome::Float,
+        ));
+        rules.push(ManageRule::new(
+            Match::Class("Firefox".into()),
+            Outcome::Ignore,
+        ));
+
+        let (place, rule) = rules.matching(&window("Firefox", "")).expect("matches");
+
+        assert_eq!(place, 1);
+        assert_eq!(rule.when().to_string(), "class=Firefox");
+        assert_eq!(rule.outcome(), &Outcome::Float);
+        assert_eq!(rules.matching(&window("Other", "")), None);
+        assert_eq!(rules.len(), 3);
+    }
+
     proptest! {
+        /// `matching` and `outcome_for` never disagree: the engine acts on the second.
+        #[test]
+        fn matching_agrees_with_outcome_for(
+            classes in proptest::collection::vec("[a-c]", 0..5),
+            class in "[a-c]",
+        ) {
+            let mut rules = Rules::new();
+            for (n, c) in classes.iter().enumerate() {
+                let outcome = if n % 2 == 0 { Outcome::Float } else { Outcome::Ignore };
+                rules.push(ManageRule::new(Match::Class(c.clone()), outcome));
+            }
+            let info = window(&class, "");
+            prop_assert_eq!(
+                rules.matching(&info).map(|(_, rule)| rule.outcome()),
+                rules.outcome_for(&info)
+            );
+        }
+
         #[test]
         fn no_rules_means_no_outcome(class in ".*", title in ".*") {
             let rules = Rules::new();
