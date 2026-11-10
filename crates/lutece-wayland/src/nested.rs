@@ -53,6 +53,8 @@ pub struct NestedBackend {
     unthrottled: bool,
     /// Outlines drawn over the windows, first on top.
     outlines: Vec<Outline>,
+    /// Whether input from the window is ignored; see [`Self::set_read_only`].
+    read_only: bool,
 }
 
 impl NestedBackend {
@@ -101,6 +103,7 @@ impl NestedBackend {
             shaders,
             unthrottled: false,
             outlines: Vec::new(),
+            read_only: false,
         })
     }
 
@@ -109,6 +112,21 @@ impl NestedBackend {
     /// client is told.
     pub fn set_outlines(&mut self, outlines: Vec<Outline>) {
         self.outlines = outlines;
+    }
+
+    /// Makes the window read-only, or lets it take input again. While it is read-only, the
+    /// keyboard and pointer of the window do nothing: no key reaches the core or a client,
+    /// and the pointer does not move on the screen. Only the release of a key or button
+    /// already down gets through, so none is left held. Clients are still served, and
+    /// whatever the scene says is still shown.
+    pub const fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+    }
+
+    /// Whether the window is read-only.
+    #[must_use]
+    pub const fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// The name clients put in `WAYLAND_DISPLAY` to reach this compositor.
@@ -182,10 +200,14 @@ impl NestedBackend {
         }
 
         let bounds = (f64::from(width), f64::from(height));
-        let mut events: Vec<Event> = inputs
-            .into_iter()
-            .filter_map(|input| input::apply(&mut self.wayland, input, bounds))
-            .collect();
+        let mut events: Vec<Event> = Vec::new();
+        for input in inputs {
+            if self.read_only {
+                input::apply_read_only(&mut self.wayland, input);
+            } else if let Some(event) = input::apply(&mut self.wayland, input, bounds) {
+                events.push(event);
+            }
+        }
         events.extend(self.wayland.next_events(timeout.min(WAIT_SLICE))?);
         Ok(events)
     }

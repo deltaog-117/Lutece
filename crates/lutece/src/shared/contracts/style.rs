@@ -38,6 +38,38 @@ pub struct Border {
     pub color: Rgba,
 }
 
+/// A band drawn above a window, outside the area the core gave it, as wide as the window with
+/// its border.
+///
+/// It is only a coloured band: no title is written in it yet. It is drawn as a rounded
+/// bar, whose corners follow the window's radius but never more than half its height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct TitleBar {
+    /// Height in pixels; 0 draws no bar.
+    pub height: u16,
+    /// Its colour.
+    pub color: Rgba,
+}
+
+/// A soft shadow drawn behind a window, outside the area the core gave it.
+///
+/// It fades out over `blur` pixels from the window's edge, is moved by `dx` and `dy` (a
+/// positive `dy` is down on the screen), and is not drawn under the window itself, so a
+/// translucent window does not show it through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Shadow {
+    /// How far the shadow fades out, in pixels; 0 draws no shadow.
+    pub blur: u16,
+    /// How far it is moved to the right, in pixels; negative is left.
+    pub dx: i16,
+    /// How far it is moved down, in pixels; negative is up.
+    pub dy: i16,
+    /// Its colour.
+    pub color: Rgba,
+}
+
 /// How an animation's progress relates to elapsed time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -92,6 +124,8 @@ pub struct Style {
     border: Border,
     opacity: u8,
     transition: Transition,
+    title_bar: TitleBar,
+    shadow: Shadow,
 }
 
 impl Default for Style {
@@ -102,6 +136,8 @@ impl Default for Style {
             // Opaque, not zero: a window with no style must stay visible.
             opacity: u8::MAX,
             transition: Transition::default(),
+            title_bar: TitleBar::default(),
+            shadow: Shadow::default(),
         }
     }
 }
@@ -135,6 +171,25 @@ impl Style {
         self
     }
 
+    /// Draws a band `height` pixels tall in `color` above the window.
+    #[must_use]
+    pub const fn with_title_bar(mut self, height: u16, color: Rgba) -> Self {
+        self.title_bar = TitleBar { height, color };
+        self
+    }
+
+    /// Draws a shadow that fades out over `blur` pixels, moved by (`dx`, `dy`), in `color`.
+    #[must_use]
+    pub const fn with_shadow(mut self, blur: u16, dx: i16, dy: i16, color: Rgba) -> Self {
+        self.shadow = Shadow {
+            blur,
+            dx,
+            dy,
+            color,
+        };
+        self
+    }
+
     /// Corner radius in pixels.
     #[must_use]
     pub const fn radius(&self) -> u16 {
@@ -151,6 +206,18 @@ impl Style {
     #[must_use]
     pub const fn opacity(&self) -> u8 {
         self.opacity
+    }
+
+    /// The band above the window.
+    #[must_use]
+    pub const fn title_bar(&self) -> TitleBar {
+        self.title_bar
+    }
+
+    /// The shadow behind the window.
+    #[must_use]
+    pub const fn shadow(&self) -> Shadow {
+        self.shadow
     }
 
     /// The animation.
@@ -171,6 +238,29 @@ mod tests {
         assert_eq!(style.radius(), 0);
         assert_eq!(style.border(), Border::default());
         assert_eq!(style.transition().duration_ms, 0);
+        assert_eq!(style.title_bar(), TitleBar::default());
+        assert_eq!(style.shadow(), Shadow::default());
+    }
+
+    #[test]
+    fn a_title_bar_and_a_shadow_are_set_apart_from_the_rest() {
+        let color = Rgba::new(1, 2, 3, 4);
+        let style = Style::default()
+            .with_title_bar(20, color)
+            .with_shadow(12, -3, 5, color);
+
+        assert_eq!(style.title_bar(), TitleBar { height: 20, color });
+        assert_eq!(
+            style.shadow(),
+            Shadow {
+                blur: 12,
+                dx: -3,
+                dy: 5,
+                color
+            }
+        );
+        assert_eq!(style.radius(), 0);
+        assert_ne!(style, Style::default());
     }
 
     #[test]

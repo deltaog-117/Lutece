@@ -1,7 +1,7 @@
 //! Drawing windows, their popups and the cursor, and telling clients when a frame was
 //! shown.
 
-use crate::look::{Shaders, Styled};
+use crate::look::{Shaders, Styled, bar_area, bar_radius, shadow_area};
 use crate::scale::Scale;
 use crate::windows::{Layer, Look};
 use smithay::backend::renderer::element::surface::{
@@ -115,6 +115,21 @@ fn window_elements(
         )));
     }
 
+    let title_bar = style.title_bar();
+    if title_bar.height > 0 && title_bar.color.a > 0 {
+        let area = bar_area(
+            look.drawn,
+            i32::from(border.width),
+            i32::from(title_bar.height),
+        );
+        elements.push(SceneElement::Border(shaders.bar(
+            area,
+            bar_radius(radius as f32, (f64::from(title_bar.height) * factor) as f32),
+            channels(title_bar.color),
+            opacity,
+        )));
+    }
+
     // The client sized the surface for `target`; it is drawn at `drawn`.
     let shown_size_over_asked = ElementScale::from((
         ratio(look.drawn.size.w, look.target.size.w),
@@ -141,7 +156,41 @@ fn window_elements(
         };
         elements.push(SceneElement::Window(element));
     }
+    // Last, so it is behind the window and the bar, in front of what is below.
+    let shadow = style.shadow();
+    if shadow.blur > 0 && shadow.color.a > 0 {
+        let area = shadow_area(
+            look.drawn,
+            i32::from(shadow.blur),
+            i32::from(shadow.dx),
+            i32::from(shadow.dy),
+        );
+        elements.push(SceneElement::Border(shaders.shadow(
+            area,
+            drawn,
+            radius as f32,
+            [
+                (f64::from(shadow.dx) * factor) as f32,
+                (f64::from(shadow.dy) * factor) as f32,
+            ],
+            (f64::from(shadow.blur) * factor) as f32,
+            channels(shadow.color),
+            opacity,
+            frame.h,
+            flipped,
+        )));
+    }
     elements
+}
+
+/// A colour's channels as the shaders take them, each from 0 to 1.
+fn channels(color: lutece::Rgba) -> [f32; 4] {
+    [
+        f32::from(color.r) / 255.0,
+        f32::from(color.g) / 255.0,
+        f32::from(color.b) / 255.0,
+        f32::from(color.a) / 255.0,
+    ]
 }
 
 /// `shown / asked` as a number; one for an empty size, which is never drawn anyway.

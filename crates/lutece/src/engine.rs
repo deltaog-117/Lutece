@@ -7,6 +7,7 @@
 mod external;
 mod handle;
 mod scene_builder;
+mod snapshot;
 
 use crate::input::Keymap;
 use crate::layout::Layout;

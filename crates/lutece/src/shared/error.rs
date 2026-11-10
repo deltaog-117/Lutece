@@ -80,6 +80,10 @@ pub enum Error {
         /// Height of the area.
         height: u32,
     },
+    /// A snapshot of an engine cannot be restored: it breaks a rule the engine keeps, or
+    /// does not fit the configuration it is restored onto.
+    #[error("the snapshot is not valid: {0}")]
+    InvalidSnapshot(String),
     /// The area's far edges do not fit the coordinate range.
     #[error("area {0:?} extends beyond the coordinate range")]
     AreaOutOfRange(Rect),

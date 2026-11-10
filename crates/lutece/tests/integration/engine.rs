@@ -4,3 +4,4 @@ mod commands;
 mod properties;
 mod reconfigure;
 mod replay;
+mod snapshot;

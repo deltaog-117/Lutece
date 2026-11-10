@@ -3,5 +3,6 @@
 //! dependency on the other features.
 
 mod outputs;
+mod snapshot;
 pub mod stackset;
 pub mod workspace;

@@ -9,8 +9,12 @@ use super::Engine;
 use crate::layout::Layout;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::scene::Placement;
+use crate::shared::error::{Error, Result};
 use crate::shared::geometry::Rect;
 use crate::shared::ids::{Tag, WinId};
+use crate::snapshot::{
+    LayoutAnswerState, LayoutKeyState, LayoutRequestState, PlacementState, RectState, SlotState,
+};
 use std::collections::{HashMap, HashSet};
 
 /// What an answer is about: the area and the tiled windows, in reading order. An answer
@@ -35,6 +39,109 @@ pub(super) struct Slot {
 
 /// The slots by workspace.
 pub(super) type Slots = HashMap<Tag, Slot>;
+
+fn refused(why: impl std::fmt::Display) -> Error {
+    Error::InvalidSnapshot(format!("external layout: {why}"))
+}
+
+pub(super) fn rect_state(rect: Rect) -> RectState {
+    RectState {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    }
+}
+
+pub(super) fn rect_from(state: RectState) -> Result<Rect> {
+    Rect::new(state.x, state.y, state.width, state.height).map_err(refused)
+}
+
+impl Key {
+    fn to_state(&self) -> LayoutKeyState {
+        LayoutKeyState {
+            area: rect_state(self.area),
+            windows: self.windows.iter().map(|id| id.get()).collect(),
+        }
+    }
+
+    fn from_state(state: &LayoutKeyState) -> Result<Self> {
+        Ok(Self {
+            area: rect_from(state.area)?,
+            windows: state.windows.iter().map(|raw| WinId::new(*raw)).collect(),
+        })
+    }
+}
+
+impl Slot {
+    /// This slot, for the workspace `tag`, as plain data.
+    pub(super) fn to_state(&self, tag: &Tag) -> SlotState {
+        SlotState {
+            tag: tag.as_str().to_owned(),
+            pending: self
+                .pending
+                .as_ref()
+                .map(|(serial, key)| LayoutRequestState {
+                    serial: *serial,
+                    key: key.to_state(),
+                }),
+            answer: self
+                .answer
+                .as_ref()
+                .map(|(key, placements)| LayoutAnswerState {
+                    key: key.to_state(),
+                    placements: placements
+                        .iter()
+                        .map(|placement| PlacementState {
+                            window: placement.id.get(),
+                            rect: rect_state(placement.rect),
+                        })
+                        .collect(),
+                }),
+            refused: self.refused.as_ref().map(Key::to_state),
+        }
+    }
+
+    /// Builds a slot, and the tag it belongs to, from plain data.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSnapshot`] if the tag or a rectangle is not valid.
+    pub(super) fn from_state(state: &SlotState) -> Result<(Tag, Self)> {
+        let tag = Tag::try_new(state.tag.as_str()).map_err(refused)?;
+        let pending = state
+            .pending
+            .as_ref()
+            .map(|request| Ok((request.serial, Key::from_state(&request.key)?)))
+            .transpose()?;
+        let answer = state
+            .answer
+            .as_ref()
+            .map(|answer| {
+                let placements = answer
+                    .placements
+                    .iter()
+                    .map(|placement| {
+                        Ok(Placement {
+                            id: WinId::new(placement.window),
+                            rect: rect_from(placement.rect)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((Key::from_state(&answer.key)?, placements))
+            })
+            .transpose()?;
+        let refused_key = state.refused.as_ref().map(Key::from_state).transpose()?;
+        Ok((
+            tag,
+            Self {
+                pending,
+                answer,
+                refused: refused_key,
+            },
+        ))
+    }
+}
 
 impl Engine {
     /// Asks for a layout wherever a workspace on a screen has the external layout and no

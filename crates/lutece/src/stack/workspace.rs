@@ -7,6 +7,8 @@ use std::collections::{HashMap, VecDeque};
 use std::iter;
 use std::mem;
 
+mod snapshot;
+
 /// A non-empty ordered list of windows split around the focused one (a zipper).
 ///
 /// Reading order is `up`, then `focus`, then `down`. Because `focus` is a plain value

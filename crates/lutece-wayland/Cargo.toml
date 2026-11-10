@@ -11,6 +11,15 @@ authors.workspace = true
 unsafe_code = "deny"
 missing_docs = "warn"
 
+# The hardware session. Off by default: it needs a real seat and screen to run, and the
+# nested backend does not use it.
+[features]
+drm = []
+
+[[example]]
+name = "drm_pattern"
+required-features = ["drm"]
+
 [dependencies]
 lutece = { path = "../lutece" }
 rustix = { version = "1", features = ["event"] }

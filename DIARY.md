@@ -1656,3 +1656,30 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-08 | Initial entry | deltaog-117 |
+
+### 2026-11-08 – Naming the rule that matched
+
+- **Scope:** one accessor the window manager asked for. No COA: the alternative, a copy of the matching in the host, would drift from the engine the first time `Match` gains a kind.
+- **What:** `Rules::matching(&WindowInfo)` returns the first matching rule with its place, and `ManageRule` and `Match` can be read and printed. `outcome_for` is unchanged and a property test checks the two never disagree.
+- **Not done:** `Rules` still cannot be listed or edited; only the one question is answered.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-08 | Initial entry | deltaog-117 |
+
+### 2026-11-10 – Title bar and shadow, a read-only screen, a snapshot of the engine, a DRM test pattern
+
+- **Scope:** the parts of four window-manager roadmap items that are this library's, with COAs chosen there: 2-C (modeset and render behind a feature flag), 3-A (a read-only mode and a way to show a past scene), 4-A (title bar and shadow in `Style`) and 5-A (the engine serialisable).
+- **Style:** `TitleBar` and `Shadow` joined `Style` as two more small copy types; `Style` is `non_exhaustive`, so nothing else changed. They are drawn outside the area the core gave the window, like the border: a window's own size is never changed by them. The band is a filled bar rounded at all four ends (a bar rounded only on top depends on which way the pixel shader's y axis runs, which could not be checked without a screen). The shadow is a separate pixel shader that finds its place from `gl_FragCoord` with the same `fb_height` and `flip` the window shader uses, fades with `smoothstep` over `blur` pixels and is cut away under the window. All three shaders pass `glslangValidator` as GLSL ES 1.00.
+- **Read-only screen:** `Scene::retaining` (property-free, two tests and a doctest) cuts a past scene to the windows that still exist; `NestedBackend::set_read_only` drops input in `next_events`. A release of a key or button is still passed so nothing stays down in a client; a press, motion or scroll is dropped before the core or a client sees it.
+- **Snapshot:** `Engine` keeps its state in private types, so `lutece::snapshot` is a tree of public plain types and the conversions live next to the private types they read (child modules of `workspace` and `stack`, and `external`). Restoring checks what the parts promise each other: a window on one workspace, a focus inside its stack, floating windows inside the stack, the fullscreen window being the focused one, the template's workspaces in the template's order, styles and properties only for managed windows, and nothing stored that the engine would not store (a default style, an empty reservation). Lists kept in hash tables are written sorted. The configuration is not in a snapshot, so a snapshot cannot change what keys do. A property test at 5 000 cases found one mistake of mine (outputs repeated as the backend reported them).
+- **DRM:** the module is behind a feature, since nested use never needs it; one `unsafe` call each for the EGL display and the renderer, in the one function that already is allowed it for the swap interval. It compiled against Smithay 0.7 as written.
+- **Not done:** nothing here was seen on a screen. `Engine::restore` takes `Engine`'s state only, so a window manager that wants a snapshot of its own state must save that too. The session backend with clients and input is not built.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-10 | Initial entry | deltaog-117 |

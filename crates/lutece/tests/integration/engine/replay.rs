@@ -230,7 +230,7 @@ impl Model {
     }
 }
 
-fn arbitrary_event() -> impl Strategy<Value = Event> {
+pub(super) fn arbitrary_event() -> impl Strategy<Value = Event> {
     prop_oneof![
         (0u64..8).prop_map(open),
         (0u64..8).prop_map(|n| Event::WindowClosed(w(n))),
@@ -365,7 +365,7 @@ fn pressed(c: char, modifiers: Modifiers) -> Event {
     Event::KeyPressed(key(c, modifiers))
 }
 
-fn keymap() -> Keymap {
+pub(super) fn keymap() -> Keymap {
     let mut keymap = Keymap::new();
     let shift = Modifiers::SUPER | Modifiers::SHIFT;
     let binds = [

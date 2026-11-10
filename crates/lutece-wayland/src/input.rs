@@ -124,6 +124,28 @@ pub(crate) fn apply(
     None
 }
 
+/// Hands `input` to the compositor while the screen is read-only: only the release of a key
+/// or a button gets through, so a key or button that was already down is not left down in a
+/// client. Nothing comes back as an event, so no key reaches the core either.
+pub(crate) fn apply_read_only(wayland: &mut WaylandBackend, input: Input) {
+    match input {
+        Input::Key {
+            code,
+            state: KeyState::Released,
+            time,
+        } => {
+            // A release never grabs, so there is no event to hand back.
+            let _ = wayland.key_event(code, KeyAction::Release, time);
+        }
+        Input::Button {
+            code,
+            state: ButtonState::Released,
+            time,
+        } => wayland.pointer_button(code, ButtonAction::Release, time),
+        _ => {}
+    }
+}
+
 /// Where a pointer at `from` ends up after moving by `delta`, kept on the area that
 /// starts at the origin and measures `bounds`. A device can report a move far past the
 /// edge, and the pointer would be lost out there.

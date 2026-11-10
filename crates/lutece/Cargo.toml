@@ -10,7 +10,9 @@ workspace = true
 
 [features]
 default = []
-# Serialize-only on purpose: deserializing must go through the validating constructors.
+# The core's own types only serialize, on purpose: reading them back must go through the
+# validating constructors. `lutece::snapshot` is the exception, plain data that is read back
+# and then checked by `Engine::restore`.
 serde = ["dep:serde"]
 
 [dependencies]

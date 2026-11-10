@@ -27,6 +27,8 @@ mod apply;
 mod backend;
 mod compositor;
 mod dmabuf;
+#[cfg(feature = "drm")]
+mod drm;
 mod error;
 mod focus;
 mod input;
@@ -47,6 +49,8 @@ mod xwayland;
 pub use apply::Flow;
 pub use backend::{ButtonAction, KeyAction, WaylandBackend};
 pub use dmabuf::DmabufSupport;
+#[cfg(feature = "drm")]
+pub use drm::{ModeInfo, PatternReport, best_mode, pattern_color, pick_crtc, show_test_pattern};
 pub use error::{Error, Result};
 pub use nested::NestedBackend;
 pub use outline::Outline;

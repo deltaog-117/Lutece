@@ -175,6 +175,55 @@ impl Scene {
     pub fn get(&self, id: WinId) -> Option<&Placement> {
         self.placements.iter().find(|p| p.id == id)
     }
+
+    /// The scene with only the windows `keep` accepts, in the same order with the same
+    /// places, fullscreen marks and styles. Focus stays only if its window does.
+    ///
+    /// This is how a scene of the past is shown on a screen where some of its windows are
+    /// gone: the ones that remain keep their old places.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lutece::{Placement, Rect, Scene, WinId};
+    ///
+    /// let (a, b) = (WinId::new(1), WinId::new(2));
+    /// let rect = Rect::new(0, 0, 800, 600)?;
+    /// let scene = Scene::try_new(
+    ///     vec![Placement { id: a, rect }, Placement { id: b, rect }],
+    ///     Some(b),
+    /// )?;
+    /// let kept = scene.retaining(|id| id == a);
+    /// assert_eq!(kept.placements().len(), 1);
+    /// assert_eq!(kept.focus(), None);
+    /// # Ok::<(), lutece::Error>(())
+    /// ```
+    #[must_use]
+    pub fn retaining(&self, mut keep: impl FnMut(WinId) -> bool) -> Self {
+        let placements: Vec<Placement> = self
+            .placements
+            .iter()
+            .copied()
+            .filter(|placement| keep(placement.id))
+            .collect();
+        let listed: HashSet<WinId> = placements.iter().map(|placement| placement.id).collect();
+        Self {
+            focus: self.focus.filter(|id| listed.contains(id)),
+            fullscreen: self
+                .fullscreen
+                .iter()
+                .copied()
+                .filter(|id| listed.contains(id))
+                .collect(),
+            styles: self
+                .styles
+                .iter()
+                .filter(|(id, _)| listed.contains(id))
+                .map(|(id, style)| (*id, *style))
+                .collect(),
+            placements,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -238,6 +287,39 @@ mod tests {
             .with_style([(WinId::new(1), Style::default())])
             .expect("listed");
         assert_eq!(plain, explicit);
+    }
+
+    #[test]
+    fn retaining_keeps_order_and_drops_what_is_gone() {
+        let style = Style::default().with_radius(4);
+        let scene = Scene::try_new(
+            vec![placement(3), placement(1), placement(2)],
+            Some(WinId::new(1)),
+        )
+        .expect("valid scene")
+        .with_fullscreen([WinId::new(1)])
+        .expect("listed")
+        .with_style([(WinId::new(2), style)])
+        .expect("listed");
+
+        let kept = scene.retaining(|id| id != WinId::new(3));
+        let ids: Vec<_> = kept.placements().iter().map(|p| p.id.get()).collect();
+        assert_eq!(ids, [1, 2]);
+        assert_eq!(kept.focus(), Some(WinId::new(1)));
+        assert!(kept.is_fullscreen(WinId::new(1)));
+        assert_eq!(kept.style_of(WinId::new(2)), style);
+
+        let without_focus = scene.retaining(|id| id != WinId::new(1));
+        assert_eq!(without_focus.focus(), None);
+        assert!(!without_focus.is_fullscreen(WinId::new(1)));
+    }
+
+    #[test]
+    fn retaining_everything_changes_nothing_and_nothing_empties() {
+        let scene =
+            Scene::try_new(vec![placement(1), placement(2)], Some(WinId::new(2))).expect("valid");
+        assert_eq!(scene.retaining(|_| true), scene);
+        assert_eq!(scene.retaining(|_| false), Scene::empty());
     }
 
     #[test]

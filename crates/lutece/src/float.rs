@@ -25,6 +25,16 @@ pub(crate) struct Float {
 }
 
 impl Float {
+    /// A float from how far it was moved and resized, as `parts` gives them.
+    pub(crate) const fn from_parts(dx: i32, dy: i32, dw: i32, dh: i32) -> Self {
+        Self { dx, dy, dw, dh }
+    }
+
+    /// How far the window was moved to the right and down, and made wider and taller.
+    pub(crate) const fn parts(self) -> (i32, i32, i32, i32) {
+        (self.dx, self.dy, self.dw, self.dh)
+    }
+
     /// The window moved by `dx` and `dy`; positive goes right and down.
     pub(crate) fn moved(self, dx: i32, dy: i32) -> Self {
         Self {

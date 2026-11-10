@@ -39,6 +39,10 @@ pub enum Error {
     /// Xwayland, which runs X11 programs, could not be started.
     #[error("cannot run X11 programs: Xwayland {0}")]
     XWayland(String),
+    /// The seat, the graphics device or a screen could not be set up for the hardware
+    /// session.
+    #[error("cannot use the screen hardware: {0}")]
+    Drm(String),
     /// The core rejected a value built from what the backend reported.
     #[error(transparent)]
     Core(#[from] lutece::Error),
