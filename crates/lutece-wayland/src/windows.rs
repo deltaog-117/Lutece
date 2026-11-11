@@ -94,6 +94,9 @@ pub(crate) struct Look {
     pub(crate) target: Rectangle<i32, Logical>,
     /// The rectangle the window is drawn in now, which differs from `target` while it moves.
     pub(crate) drawn: Rectangle<i32, Logical>,
+    /// What the client calls the window, for the title bar; empty when the style has no bar,
+    /// so a window without one costs no copy.
+    pub(crate) title: String,
 }
 
 /// Every toplevel this backend knows about.
@@ -382,13 +385,16 @@ impl Windows {
             .filter_map(|id| Some((*id, self.managed.get(id)?)))
             .filter(|(_, entry)| entry.fullscreen == fullscreen)
             .filter_map(|(id, entry)| Some((id, entry, entry.rect?)))
-            .flat_map(|(id, entry, rect)| window_layers(id, entry, rect, now))
+            .flat_map(|(id, entry, rect)| {
+                let title = self.infos.get(&id).map_or("", |info| info.title.as_str());
+                window_layers(id, entry, rect, title, now)
+            })
             .collect()
     }
 }
 
 /// The layers of one placed window, front to back.
-fn window_layers(id: WinId, entry: &Entry, target: Rect, now: Instant) -> Vec<Layer> {
+fn window_layers(id: WinId, entry: &Entry, target: Rect, title: &str, now: Instant) -> Vec<Layer> {
     let Some(root) = entry.shell.wl_surface() else {
         return Vec::new();
     };
@@ -422,6 +428,11 @@ fn window_layers(id: WinId, entry: &Entry, target: Rect, now: Instant) -> Vec<La
             style: entry.style,
             target: placed_area(target),
             drawn: placed_area(rect),
+            title: if entry.style.title_bar().height > 0 {
+                title.to_owned()
+            } else {
+                String::new()
+            },
         }),
     });
     layers

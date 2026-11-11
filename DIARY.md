@@ -1683,3 +1683,17 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-10 | Initial entry | deltaog-117 |
+
+### 2026-11-11 – Title text, input held back on X11, the first hardware session
+
+- **Scope:** the parts of three window-manager roadmap items that are this library's, with the COAs chosen there: 4-A (a bundled font drawn with `ab_glyph`), 5-A (grab the input and move the windows) and 3-A (one screen with clients, input and a safe quit).
+- **Title text:** the text is rasterized on the CPU and given to Smithay as a `MemoryRenderBuffer`, drawn in front of the band. Its size, padding and colour come from the bar (60% of its height, half a height of padding, light or dark by brightness) instead of new `Style` fields: a field would have changed the wire format, the snapshot and the window manager for something the bar already decides. The picture is cached by title, bar size and colour and the cache is emptied at 256 entries, because a clock in a terminal's title makes a new picture every second. The font is JetBrains Mono Regular (273 KB, OFL) in `assets/` with its licence, since the roadmap left the choice open and the machine has it. A control character in a title is turned into a space, so a newline cannot break the bar.
+- **X11 rewind:** nothing else was missing, since the host already hands the screen a retained scene, which X11 shows by moving the windows. What was missing was the input. `XGrabKeyboard` and `XGrabPointer` on the root with no event mask make the server discard what the devices send; a failure of the second releases the first, so it is all or nothing. The server frees the grabs with the connection, so a crashed host leaves a working screen; a hung one does not until it is killed, and that is the cost of this choice. A test with a second client that tries to grab says whether the hold is on, with no timing in it.
+- **DRM session:** built on what `show_test_pattern` already did (its screen choice, renderer and error naming are shared, with three visibility changes) and on the `input` module, which was written for libinput from the start. The pieces that cannot be tried here are kept as small as possible: the two chords are a pure state machine with property tests, the pointer is an ASCII arrow with tests on its pixels. Frames are drawn with `Transform::Normal` and `flipped = false`, the opposite of the nested window: a dmabuf is scanned out from its first row and a window surface from its last, and the corner and shadow shaders measure from the top with `flip`. That is reasoning from the shaders, not something seen, and it is the first thing to look at on a screen.
+- **Not done:** a second screen, a screen plugged in or out, each output's scale, libinput settings, drawing only on change. Nothing here was seen on a screen. The session was compiled against Smithay 0.7 and its pure parts are tested; `DrmBackend::open` was not run, because from a graphical session it could take the screen from the compositor that is showing it.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-11 | Initial entry | deltaog-117 |

@@ -11,6 +11,7 @@ mod events;
 mod fullscreen;
 mod keys;
 mod monitors;
+mod read_only;
 mod rules;
 mod support;
 mod tiling;

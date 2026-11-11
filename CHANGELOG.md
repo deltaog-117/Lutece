@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Title text: the title bar shows the window's title. Drawn with `ab_glyph` (new dependency of `lutece-wayland`) from JetBrains Mono Regular, shipped in the crate under the SIL Open Font License. Sized and coloured from the bar, cut with an ellipsis, kept per title in a bounded cache. No new `Style` field.
+- `X11Backend::set_read_only` and `is_read_only`: hold the keyboard and the pointer back from the programs with active grabs on the root window, or give them back. New error `Error::InputAlreadyGrabbed` when another client holds either.
+- `DrmBackend` (feature `drm`): the compositor as a login's session on one real screen, with the seat, the GPU and input from libseat, DRM and libinput. `open`, `next_events`, `apply_scene`, `apply_effects`, `render`, `set_outlines`, `set_read_only`, `is_closed` and the rest of `NestedBackend`'s calls. Ctrl+Alt+Backspace ends it and Ctrl+Alt+F1 to F12 switch terminal. One screen only, no hotplug. Not run on a screen yet.
 - Title bar and shadow in `Style`: `with_title_bar(height, color)` and `with_shadow(blur, dx, dy, color)`, read with `title_bar()` and `shadow()` (types `TitleBar` and `Shadow`). The nested Wayland backend draws a rounded band above the window and its border and a soft shadow behind it that is not drawn under the window. There is no title text. A style with neither equals one from before.
 - `Scene::retaining(keep)`: the scene with only the windows `keep` accepts, in order, with their places, fullscreen marks and styles; focus stays only if its window does.
 - `NestedBackend::set_read_only` and `is_read_only`: while on, the window's keyboard and pointer do nothing (only the release of a key or button already down gets through) and clients are served as usual.

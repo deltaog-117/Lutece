@@ -360,6 +360,7 @@ impl WaylandBackend {
         &self,
         renderer: &mut GlesRenderer,
         shaders: &crate::look::Shaders,
+        titles: &mut crate::title::TitleCache,
         frame: smithay::utils::Size<i32, smithay::utils::Physical>,
         flipped: bool,
     ) -> Vec<SceneElement> {
@@ -368,6 +369,7 @@ impl WaylandBackend {
             renderer,
             self.state.scale,
             shaders,
+            titles,
             frame,
             flipped,
         )

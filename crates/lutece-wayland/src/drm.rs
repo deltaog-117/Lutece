@@ -7,8 +7,12 @@
 //! What it proves is that the seat, the mode setting, the buffers and the page flips work
 //! on this machine, which a later session backend builds on.
 
+mod cursor;
+mod keys;
 mod pattern;
 mod pick;
+mod session;
 
 pub use pattern::{PatternReport, show_test_pattern};
 pub use pick::{ModeInfo, best_mode, pattern_color, pick_crtc};
+pub use session::DrmBackend;

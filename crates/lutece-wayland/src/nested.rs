@@ -12,6 +12,7 @@ use crate::input;
 use crate::look::Shaders;
 use crate::outline::{self, Outline};
 use crate::scale::Scale;
+use crate::title::TitleCache;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
 use smithay::backend::egl::ffi;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -49,6 +50,8 @@ pub struct NestedBackend {
     shown_cursor: Option<CursorImageStatus>,
     /// The shaders that draw windows' corners and borders.
     shaders: Shaders,
+    /// The pictures of window titles, made again only when a title or a bar changes.
+    titles: TitleCache,
     /// Whether the swap interval was set; see [`set_swap_interval`].
     unthrottled: bool,
     /// Outlines drawn over the windows, first on top.
@@ -101,6 +104,7 @@ impl NestedBackend {
             scale,
             shown_cursor: None,
             shaders,
+            titles: TitleCache::new(),
             unthrottled: false,
             outlines: Vec::new(),
             read_only: false,
@@ -249,10 +253,13 @@ impl NestedBackend {
             let mut elements = outline::elements(&self.outlines, &self.shaders, self.scale);
             elements.extend(self.wayland.cursor_elements(renderer));
             // The frame is drawn flipped, which turns the framebuffer's y axis over.
-            elements.extend(
-                self.wayland
-                    .surface_elements(renderer, &self.shaders, size, true),
-            );
+            elements.extend(self.wayland.surface_elements(
+                renderer,
+                &self.shaders,
+                &mut self.titles,
+                size,
+                true,
+            ));
             // The winit framebuffer has its origin at the bottom: drawn as is, the whole
             // picture comes out upside down (seen when the nested window was first looked at).
             let mut frame = renderer

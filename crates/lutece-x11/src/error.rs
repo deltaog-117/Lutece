@@ -47,6 +47,10 @@ pub enum Error {
     /// with this modifier.
     #[error("the drag buttons with modifier {0:?} are already grabbed by another client")]
     DragAlreadyGrabbed(Modifiers),
+    /// Another client holds the keyboard or the pointer, so the backend cannot hold the input
+    /// back from the programs: a screen locker or a program in the middle of a drag.
+    #[error("another client holds the keyboard or the pointer, so input cannot be held back")]
+    InputAlreadyGrabbed,
     /// Waiting for the X connection to have something to read failed.
     #[error("cannot wait for the X server: {0}")]
     Wait(#[source] io::Error),

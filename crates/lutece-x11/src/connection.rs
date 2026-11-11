@@ -4,7 +4,10 @@ use crate::apply::{Flow, execute, plan, run_effects};
 use crate::docks::{Reserve, Strut};
 use crate::drag::Drags;
 use crate::error::{Error, Result};
-use crate::grabs::{Keyboard, grab_drag_buttons, grab_keys, regrab_keys, release_drag_buttons};
+use crate::grabs::{
+    Keyboard, grab_drag_buttons, grab_keys, hold_input, regrab_keys, release_drag_buttons,
+    release_input,
+};
 use crate::outputs;
 use crate::translate::{
     changes_description, existing, fullscreen_request, key_press, translate, win_id,
@@ -71,6 +74,8 @@ pub struct X11Backend {
     shown: Scene,
     /// Events produced before the first X event, such as the monitors.
     queued: Vec<Event>,
+    /// Whether the keyboard and the pointer are held back from the programs.
+    read_only: bool,
 }
 
 impl X11Backend {
@@ -138,6 +143,7 @@ impl X11Backend {
             drags: Drags::default(),
             shown: Scene::empty(),
             queued,
+            read_only: false,
         })
     }
 
@@ -268,6 +274,37 @@ impl X11Backend {
         }
         self.conn.flush()?;
         Ok(())
+    }
+
+    /// Holds the keyboard and the pointer back from the programs (`true`), or gives them back
+    /// (`false`). While held, nothing typed or clicked reaches a window or this backend: the
+    /// screen can be shown something that is not what the programs are drawing, such as a
+    /// past moment, without a press landing on a window that is not where it looks. Asking
+    /// for the state it already has does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InputAlreadyGrabbed`] if another client holds the keyboard or the
+    /// pointer (a screen locker, a drag in progress), and then nothing is held. Giving the
+    /// devices back only fails if the connection breaks.
+    pub fn set_read_only(&mut self, read_only: bool) -> Result<()> {
+        if read_only == self.read_only {
+            return Ok(());
+        }
+        if read_only {
+            hold_input(&self.conn, self.root)?;
+        } else {
+            release_input(&self.conn)?;
+        }
+        self.conn.flush()?;
+        self.read_only = read_only;
+        Ok(())
+    }
+
+    /// Whether the keyboard and the pointer are held back; see [`set_read_only`](Self::set_read_only).
+    #[must_use]
+    pub const fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Makes the screen show `scene`, sending only what differs from what is shown.

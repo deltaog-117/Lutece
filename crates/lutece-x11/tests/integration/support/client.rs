@@ -7,8 +7,8 @@ use x11rb::connection::Connection;
 use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
 use x11rb::protocol::xproto::{
     AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ClientMessageEvent, ConnectionExt,
-    CreateWindowAux, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, MapState,
-    PropMode, Window, WindowClass,
+    CreateWindowAux, EventMask, GrabMode, GrabStatus, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
+    MOTION_NOTIFY_EVENT, MapState, PropMode, Window, WindowClass,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -340,6 +340,72 @@ impl Client {
                 .expect("set monitor request");
         }
         self.round_trip();
+    }
+
+    /// Whether this client can take the keyboard and the pointer right now; it gives them back
+    /// at once. It cannot while another client, such as a window manager holding input back,
+    /// has them.
+    pub fn can_take_input(&self) -> bool {
+        let keyboard = self
+            .conn
+            .grab_keyboard(
+                false,
+                self.root,
+                CURRENT_TIME,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+            )
+            .expect("grab_keyboard request")
+            .reply()
+            .expect("grab_keyboard reply")
+            .status;
+        let pointer = self
+            .conn
+            .grab_pointer(
+                false,
+                self.root,
+                EventMask::NO_EVENT,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                CURRENT_TIME,
+            )
+            .expect("grab_pointer request")
+            .reply()
+            .expect("grab_pointer reply")
+            .status;
+        self.conn
+            .ungrab_keyboard(CURRENT_TIME)
+            .expect("ungrab_keyboard");
+        self.conn
+            .ungrab_pointer(CURRENT_TIME)
+            .expect("ungrab_pointer");
+        self.round_trip();
+        keyboard == GrabStatus::SUCCESS && pointer == GrabStatus::SUCCESS
+    }
+
+    /// Takes the keyboard and the pointer and keeps them while this client lives, like a
+    /// screen locker.
+    pub fn hold_input_until_dropped(&self) {
+        let keyboard = self
+            .conn
+            .grab_keyboard(
+                false,
+                self.root,
+                CURRENT_TIME,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+            )
+            .expect("grab_keyboard request")
+            .reply()
+            .expect("grab_keyboard reply")
+            .status;
+        assert_eq!(
+            keyboard,
+            GrabStatus::SUCCESS,
+            "the test client takes the keyboard"
+        );
     }
 
     /// Destroys a window this client created.

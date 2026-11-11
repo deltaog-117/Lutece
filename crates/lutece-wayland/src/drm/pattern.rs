@@ -21,7 +21,7 @@ use std::time::Duration;
 /// How long to wait for a page flip before concluding the screen stopped answering.
 const FLIP_TIMEOUT: Duration = Duration::from_secs(2);
 /// Formats tried in turn for the buffers shown: opaque first, since nothing is behind them.
-const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Xrgb8888, Fourcc::Argb8888];
+pub(super) const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Xrgb8888, Fourcc::Argb8888];
 
 /// What [`show_test_pattern`] put on the screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,17 +192,17 @@ impl Run {
 }
 
 /// A connected screen with the mode and engine chosen for it.
-struct Target {
-    name: String,
-    connector: connector::Handle,
-    crtc: smithay::reexports::drm::control::crtc::Handle,
-    mode: smithay::reexports::drm::control::Mode,
-    size: [u16; 2],
-    refresh_hz: u32,
+pub(super) struct Target {
+    pub(super) name: String,
+    pub(super) connector: connector::Handle,
+    pub(super) crtc: smithay::reexports::drm::control::crtc::Handle,
+    pub(super) mode: smithay::reexports::drm::control::Mode,
+    pub(super) size: [u16; 2],
+    pub(super) refresh_hz: u32,
 }
 
 /// The first connected connector that has a mode and a free scanout engine.
-fn find_target(device: &DrmDevice) -> Result<Target> {
+pub(super) fn find_target(device: &DrmDevice) -> Result<Target> {
     let resources = device
         .resource_handles()
         .map_err(hardware("reading the screens"))?;
@@ -260,7 +260,7 @@ fn find_target(device: &DrmDevice) -> Result<Target> {
 
 /// Builds the GL renderer on the GPU's own buffer device.
 #[allow(unsafe_code)]
-fn make_renderer(gbm: GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer> {
+pub(super) fn make_renderer(gbm: GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer> {
     // SAFETY: `gbm` is a live buffer device that this call takes and the display keeps
     // alive; nothing else makes an EGL display from it.
     let display = unsafe { EGLDisplay::new(gbm) }.map_err(hardware("EGL display"))?;
@@ -271,6 +271,6 @@ fn make_renderer(gbm: GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer> {
 }
 
 /// Names the step in an error, so a failure on a machine without a screen says where.
-fn hardware<E: Display>(step: &'static str) -> impl Fn(E) -> Error {
+pub(super) fn hardware<E: Display>(step: &'static str) -> impl Fn(E) -> Error {
     move |error| Error::Drm(format!("{step}: {error}"))
 }

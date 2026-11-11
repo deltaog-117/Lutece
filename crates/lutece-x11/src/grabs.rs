@@ -10,8 +10,10 @@ use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::xproto::{
-    ButtonIndex, ConnectionExt, EventMask, Grab, GrabMode, KeyButMask, Keycode, ModMask, Window,
+    ButtonIndex, ConnectionExt, EventMask, Grab, GrabMode, GrabStatus, KeyButMask, Keycode,
+    ModMask, Window,
 };
+use x11rb::{CURRENT_TIME, NONE};
 
 /// CapsLock and NumLock (Mod2 on practically every setup) must not stop a binding from
 /// matching, so each key is grabbed with every combination of them held.
@@ -220,6 +222,47 @@ pub(crate) fn release_drag_buttons(conn: &impl Connection, root: Window) -> Resu
     for button in [ButtonIndex::M1, ButtonIndex::M3] {
         conn.ungrab_button(button, root, ModMask::ANY)?;
     }
+    Ok(())
+}
+
+/// Takes the keyboard and the pointer from every program, so nothing typed or clicked
+/// reaches one until [`release_input`]. The grab is active and asks for no events, so the
+/// server discards what the devices send meanwhile instead of passing it on.
+///
+/// The server frees the grabs by itself if this connection ends, so a host that crashes
+/// does not leave the screen without input; one that hangs does, until it is killed.
+pub(crate) fn hold_input(conn: &impl Connection, root: Window) -> Result<()> {
+    let keyboard = conn
+        .grab_keyboard(false, root, CURRENT_TIME, GrabMode::ASYNC, GrabMode::ASYNC)?
+        .reply()?;
+    if keyboard.status != GrabStatus::SUCCESS {
+        return Err(Error::InputAlreadyGrabbed);
+    }
+    let pointer = conn
+        .grab_pointer(
+            false,
+            root,
+            EventMask::NO_EVENT,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
+            NONE,
+            NONE,
+            CURRENT_TIME,
+        )?
+        .reply()?;
+    if pointer.status != GrabStatus::SUCCESS {
+        // Half a hold would leave the keyboard dead and the pointer live: all or nothing.
+        conn.ungrab_keyboard(CURRENT_TIME)?;
+        return Err(Error::InputAlreadyGrabbed);
+    }
+    Ok(())
+}
+
+/// Gives the keyboard and the pointer back after [`hold_input`]. A device this client does
+/// not hold is left alone by the server, so it is safe to call without a hold.
+pub(crate) fn release_input(conn: &impl Connection) -> Result<()> {
+    conn.ungrab_keyboard(CURRENT_TIME)?;
+    conn.ungrab_pointer(CURRENT_TIME)?;
     Ok(())
 }
 

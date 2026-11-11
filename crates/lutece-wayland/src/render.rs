@@ -3,7 +3,9 @@
 
 use crate::look::{Shaders, Styled, bar_area, bar_radius, shadow_area};
 use crate::scale::Scale;
+use crate::title::TitleCache;
 use crate::windows::{Layer, Look};
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
@@ -26,11 +28,13 @@ type WindowSurface =
 
 render_elements! {
     /// One thing to draw: a surface as its client made it, a window's surface in its
-    /// style, or the border around a window.
+    /// style, the border around a window, or a picture the compositor made itself (a title,
+    /// the pointer).
     pub(crate) SceneElement<=GlesRenderer>;
     Surface=WaylandSurfaceRenderElement<GlesRenderer>,
     Window=WindowSurface,
     Border=PixelShaderElement,
+    Picture=MemoryRenderBufferRenderElement<GlesRenderer>,
 }
 
 /// What to draw for every placed window and its popups, front to back, which is the
@@ -48,6 +52,7 @@ pub(crate) fn surface_elements(
     renderer: &mut GlesRenderer,
     scale: Scale,
     shaders: &Shaders,
+    titles: &mut TitleCache,
     frame: Size<i32, Physical>,
     flipped: bool,
 ) -> Vec<SceneElement> {
@@ -56,7 +61,7 @@ pub(crate) fn surface_elements(
         match &layer.look {
             Some(look) => {
                 elements.extend(window_elements(
-                    layer, look, renderer, scale, shaders, frame, flipped,
+                    layer, look, renderer, scale, shaders, titles, frame, flipped,
                 ));
             }
             None => elements.extend(plain_elements(layer, renderer, scale)),
@@ -80,12 +85,14 @@ fn plain_elements(layer: &Layer, renderer: &mut GlesRenderer, scale: Scale) -> V
     .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn window_elements(
     layer: &Layer,
     look: &Look,
     renderer: &mut GlesRenderer,
     scale: Scale,
     shaders: &Shaders,
+    titles: &mut TitleCache,
     frame: Size<i32, Physical>,
     flipped: bool,
 ) -> Vec<SceneElement> {
@@ -122,6 +129,16 @@ fn window_elements(
             i32::from(border.width),
             i32::from(title_bar.height),
         );
+        // In front of the band, so it is pushed first: elements run front to back.
+        elements.extend(title_element(
+            &look.title,
+            area,
+            title_bar.color,
+            renderer,
+            scale,
+            titles,
+            opacity,
+        ));
         elements.push(SceneElement::Border(shaders.bar(
             area,
             bar_radius(radius as f32, (f64::from(title_bar.height) * factor) as f32),
@@ -181,6 +198,34 @@ fn window_elements(
         )));
     }
     elements
+}
+
+/// The title written on a bar of `area` (logical), if there is a title and room for it.
+fn title_element(
+    title: &str,
+    area: Rectangle<i32, Logical>,
+    bar_color: lutece::Rgba,
+    renderer: &mut GlesRenderer,
+    scale: Scale,
+    titles: &mut TitleCache,
+    opacity: f32,
+) -> Option<SceneElement> {
+    let physical = scale.rect_to_physical(area);
+    let width = u32::try_from(physical.size.w).ok()?;
+    let height = u32::try_from(physical.size.h).ok()?;
+    let buffer = titles.buffer(title, width, height, bar_color)?;
+    // A title that cannot be uploaded leaves the bar a plain band; it must not cost the frame.
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        physical.loc.to_f64(),
+        &buffer,
+        Some(opacity),
+        None,
+        Some(area.size),
+        Kind::Unspecified,
+    )
+    .ok()
+    .map(SceneElement::Picture)
 }
 
 /// A colour's channels as the shaders take them, each from 0 to 1.
