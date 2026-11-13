@@ -1714,3 +1714,20 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-13 | Initial entry | deltaog-117 |
+
+---
+
+### 2026-11-13 – Several screens on the machine's display, and a kernel interface
+
+- **Scope:** the lutece half of the window manager's items 3 (A: several screens at start-up with a scale for each, no hotplug) and 4 (B, step one: an interface for kernels). The window manager's diary has the decisions and the reasons for choosing them; this entry has what changed here and why it is shaped as it is.
+- **`Kernel`:** four calls and a version number, because that is what replay, the timeline and the checkpoint file use. `Engine` forwards to its own methods of the same name, so the trait adds no behaviour and the inherent methods still win in method resolution, which keeps every existing caller compiling. Three property tests pin the contract a second kernel must keep (the trait changes nothing, a snapshot restores to an equal kernel, the same events give equal kernels) and state it in the trait's documentation, since replay depends on determinism.
+- **Several screens, the shape:** `DrmBackend` held one surface, one size, one scale and one pending-flip flag; it now holds a list of heads, each with its own. The choices that are not obvious: a flip lands per screen (`DrmEvent::VBlank` names the scanout engine), so the flags are per head; the change to the scene is *handed to* the heads as a stale mark when a frame is due and the shared damage is spent at once, so a head that was still waiting draws its picture on a later call without the others redrawing for nothing; and the frame callbacks go out after any head drew.
+- **Scale per output, the choice:** the core never sees a scale, so everything stays in logical pixels and only drawing and the client hints change. A window is drawn on every screen it touches at that screen's scale (a frame is drawn from a *view*: the screen's corner and its scale, and the layers are shifted by the corner before they are turned into pictures), but its client can be told only one scale, so it is told the scale of the screen it covers most, the earlier screen on a tie. That is `scale_for`, a pure function, so the rule is tested without a display. A layer surface is told the scale of its own output, which the layer map's sizes already followed.
+- **The pointer:** the old clamp kept the pointer inside one rectangle at the origin. With two monitors of different heights the box around them holds places no screen covers, where the arrow would sit unseen. `nearest` puts a point on the nearest screen (itself when a screen holds it). My first property for it was wrong, not the code: a point just left of a tall screen is nearer to that screen than to the short screen's lower edge, as it should be. The test is now two concrete cases that say so.
+- **Not done:** nothing here was seen on a screen. The multi-head draw and the per-head flips are checked by compiling, by the pure parts and by the unchanged nested-window tests; the window manager's `docs/live-check.md` section 12 says what to look at. Hotplug is not built, a screen cannot be turned, and Xwayland's programs draw at one scale. The `Kernel` interface is only exercised by `Engine` here; the window manager's tests add a toy kernel.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-13 | Initial entry | deltaog-117 |

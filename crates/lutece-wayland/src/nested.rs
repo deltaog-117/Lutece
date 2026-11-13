@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 use crate::input;
 use crate::look::Shaders;
 use crate::outline::{self, Outline};
+use crate::render::View;
 use crate::scale::Scale;
 use crate::settings::InputSettings;
 use crate::title::TitleCache;
@@ -210,12 +211,13 @@ impl NestedBackend {
                 .set_outputs(&split(size_of(size, self.scale)?, self.outputs));
         }
 
-        let bounds = (f64::from(width), f64::from(height));
+        // The outputs tile the window, so the pointer may be anywhere in it.
+        let areas = [(0.0, 0.0, f64::from(width), f64::from(height))];
         let mut events: Vec<Event> = Vec::new();
         for input in inputs {
             if self.read_only {
                 input::apply_read_only(&mut self.wayland, input);
-            } else if let Some(event) = input::apply(&mut self.wayland, input, bounds) {
+            } else if let Some(event) = input::apply(&mut self.wayland, input, &areas) {
                 events.push(event);
             }
         }
@@ -256,8 +258,9 @@ impl NestedBackend {
                 self.unthrottled = set_swap_interval(renderer);
             }
             // Front to back: outlines, then the cursor's image, then the windows.
-            let mut elements = outline::elements(&self.outlines, &self.shaders, self.scale);
-            elements.extend(self.wayland.cursor_elements(renderer));
+            let view = View::whole(self.scale);
+            let mut elements = outline::elements(&self.outlines, &self.shaders, view);
+            elements.extend(self.wayland.cursor_elements(renderer, view));
             // The frame is drawn flipped, which turns the framebuffer's y axis over.
             elements.extend(self.wayland.surface_elements(
                 renderer,
@@ -265,6 +268,7 @@ impl NestedBackend {
                 &mut self.titles,
                 size,
                 true,
+                view,
             ));
             // The winit framebuffer has its origin at the bottom: drawn as is, the whole
             // picture comes out upside down (seen when the nested window was first looked at).

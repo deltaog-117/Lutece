@@ -87,6 +87,20 @@ pub(crate) struct Layer {
     pub(crate) look: Option<Look>,
 }
 
+impl Layer {
+    /// The same layer with everything moved by `-by`, which is how it is placed on a screen
+    /// whose top left corner is at `by`.
+    pub(crate) fn shifted(&self, by: Point<i32, Logical>) -> Self {
+        Self {
+            id: self.id,
+            surface: self.surface.clone(),
+            origin: self.origin - by,
+            popup: self.popup,
+            look: self.look.as_ref().map(|look| look.shifted(by)),
+        }
+    }
+}
+
 /// The look of a placed window's surface.
 pub(crate) struct Look {
     pub(crate) style: Style,
@@ -97,6 +111,18 @@ pub(crate) struct Look {
     /// What the client calls the window, for the title bar; empty when the style has no bar,
     /// so a window without one costs no copy.
     pub(crate) title: String,
+}
+
+impl Look {
+    /// The same look with its rectangles moved by `-by`.
+    fn shifted(&self, by: Point<i32, Logical>) -> Self {
+        Self {
+            style: self.style,
+            target: Rectangle::new(self.target.loc - by, self.target.size),
+            drawn: Rectangle::new(self.drawn.loc - by, self.drawn.size),
+            title: self.title.clone(),
+        }
+    }
 }
 
 /// Every toplevel this backend knows about.

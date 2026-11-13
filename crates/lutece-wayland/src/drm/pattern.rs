@@ -203,9 +203,20 @@ pub(super) struct Target {
 
 /// The first connected connector that has a mode and a free scanout engine.
 pub(super) fn find_target(device: &DrmDevice) -> Result<Target> {
+    let mut found = find_targets(device)?;
+    // `find_targets` never returns an empty list: it is an error then.
+    Ok(found.swap_remove(0))
+}
+
+/// Every connected connector that has a mode and a scanout engine no other screen uses, in
+/// the order the device lists them. Each gets its own engine: the ones already given out are
+/// passed on, so two screens are never put on one.
+pub(super) fn find_targets(device: &DrmDevice) -> Result<Vec<Target>> {
     let resources = device
         .resource_handles()
         .map_err(hardware("reading the screens"))?;
+    let mut taken = 0u32;
+    let mut found = Vec::new();
     for &handle in resources.connectors() {
         let info = device
             .get_connector(handle, true)
@@ -238,13 +249,13 @@ pub(super) fn find_target(device: &DrmDevice) -> Result<Target> {
                 }
             }
         }
-        // Only one screen is driven so far, so no engine is taken yet; several screens
-        // will pass the engines already given out.
-        let Some(position) = pick_crtc(possible, 0, resources.crtcs().len()) else {
+        let Some(position) = pick_crtc(possible, taken, resources.crtcs().len()) else {
             continue;
         };
+        // `pick_crtc` answers below 32, so the shift fits.
+        taken |= 1 << position;
         let mode = info.modes()[index];
-        return Ok(Target {
+        found.push(Target {
             name: format!("{:?}-{}", info.interface(), info.interface_id()),
             connector: handle,
             crtc: resources.crtcs()[position],
@@ -253,9 +264,12 @@ pub(super) fn find_target(device: &DrmDevice) -> Result<Target> {
             refresh_hz: listed[index].refresh_hz,
         });
     }
-    Err(Error::Drm(
-        "no connected screen with a mode and a free scanout engine".to_owned(),
-    ))
+    if found.is_empty() {
+        return Err(Error::Drm(
+            "no connected screen with a mode and a free scanout engine".to_owned(),
+        ));
+    }
+    Ok(found)
 }
 
 /// Builds the GL renderer on the GPU's own buffer device.

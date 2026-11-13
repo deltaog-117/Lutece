@@ -88,13 +88,13 @@ pub(crate) fn collect<B: InputBackend>(
     })
 }
 
+/// A screen the pointer may be on: its left edge, top edge, width and height, in logical
+/// pixels.
+pub(crate) type Area = (f64, f64, f64, f64);
+
 /// Hands `input` to the compositor. A key combination the core grabbed comes back as
-/// its event. `bounds` is the size of the area a moving pointer must stay inside.
-pub(crate) fn apply(
-    wayland: &mut WaylandBackend,
-    input: Input,
-    bounds: (f64, f64),
-) -> Option<Event> {
+/// its event. `areas` are the screens: a moving pointer stays on one of them.
+pub(crate) fn apply(wayland: &mut WaylandBackend, input: Input, areas: &[Area]) -> Option<Event> {
     match input {
         Input::Key { code, state, time } => {
             let action = match state {
@@ -103,9 +103,14 @@ pub(crate) fn apply(
             };
             return wayland.key_event(code, action, time).map(Event::KeyPressed);
         }
-        Input::Motion { x, y, time } => wayland.pointer_motion(x, y, time),
+        Input::Motion { x, y, time } => {
+            // An absolute device spreads over the box around every screen, which can hold
+            // places no screen covers.
+            let (x, y) = nearest(areas, (x, y));
+            wayland.pointer_motion(x, y, time);
+        }
         Input::Move { dx, dy, time } => {
-            let (x, y) = moved(wayland.pointer_location(), (dx, dy), bounds);
+            let (x, y) = moved(wayland.pointer_location(), (dx, dy), areas);
             wayland.pointer_motion(x, y, time);
         }
         Input::Button { code, state, time } => {
@@ -146,23 +151,38 @@ pub(crate) fn apply_read_only(wayland: &mut WaylandBackend, input: Input) {
     }
 }
 
-/// Where a pointer at `from` ends up after moving by `delta`, kept on the area that
-/// starts at the origin and measures `bounds`. A device can report a move far past the
-/// edge, and the pointer would be lost out there.
-fn moved(from: (f64, f64), delta: (f64, f64), bounds: (f64, f64)) -> (f64, f64) {
-    let along = |at: f64, by: f64, limit: f64| {
-        let next = at + by;
-        // Not-a-number would slip through `clamp`; a device that sends it moves nothing.
-        if next.is_nan() {
-            at
-        } else {
-            next.clamp(0.0, limit)
-        }
-    };
-    (
-        along(from.0, delta.0, bounds.0),
-        along(from.1, delta.1, bounds.1),
-    )
+/// Where a pointer at `from` ends up after moving by `delta`, kept on the screens. A device
+/// can report a move far past the edge, and the pointer would be lost out there.
+fn moved(from: (f64, f64), delta: (f64, f64), areas: &[Area]) -> (f64, f64) {
+    let next = (from.0 + delta.0, from.1 + delta.1);
+    // Not-a-number would slip through the clamping; a device that sends it moves nothing.
+    if next.0.is_nan() || next.1.is_nan() {
+        return from;
+    }
+    nearest(areas, next)
+}
+
+/// The point of the screens closest to `at`: `at` itself when a screen holds it, otherwise
+/// its nearest point on the edge of the nearest screen. With no screens, `at` is kept.
+///
+/// Screens of different sizes side by side leave places inside their bounding box that no
+/// screen covers; the pointer is moved off them rather than left where nothing is drawn.
+fn nearest(areas: &[Area], at: (f64, f64)) -> (f64, f64) {
+    areas
+        .iter()
+        .map(|&(left, top, width, height)| {
+            (
+                at.0.clamp(left, left + width),
+                at.1.clamp(top, top + height),
+            )
+        })
+        .min_by(|a, b| distance(*a, at).total_cmp(&distance(*b, at)))
+        .unwrap_or(at)
+}
+
+/// The square of the distance between two points; enough to tell which is nearer.
+fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)
 }
 
 #[cfg(test)]
@@ -181,9 +201,44 @@ mod tests {
             dx in -1.0e9f64..1.0e9,
             dy in -1.0e9f64..1.0e9,
         ) {
-            let (nx, ny) = moved((x * width, y * height), (dx, dy), (width, height));
+            let (nx, ny) = moved((x * width, y * height), (dx, dy), &[(0.0, 0.0, width, height)]);
             prop_assert!((0.0..=width).contains(&nx));
             prop_assert!((0.0..=height).contains(&ny));
+        }
+
+        /// With several screens, the pointer is always on one of them, however far the
+        /// device reports and wherever the screens are.
+        #[test]
+        fn the_pointer_is_always_on_a_screen(
+            areas in prop::collection::vec(
+                (-5000.0f64..5000.0, -5000.0f64..5000.0, 1.0f64..4000.0, 1.0f64..4000.0),
+                1..4,
+            ),
+            dx in -1.0e9f64..1.0e9,
+            dy in -1.0e9f64..1.0e9,
+        ) {
+            let from = (areas[0].0, areas[0].1);
+            let (nx, ny) = moved(from, (dx, dy), &areas);
+            let on_a_screen = areas.iter().any(|&(left, top, width, height)| {
+                (left..=left + width).contains(&nx) && (top..=top + height).contains(&ny)
+            });
+            prop_assert!(on_a_screen);
+        }
+
+        /// A place on a screen is kept exactly: the pointer is only moved off places no screen
+        /// covers.
+        #[test]
+        fn a_place_on_a_screen_is_kept(
+            width in 1.0f64..4000.0,
+            height in 1.0f64..4000.0,
+            other_height in 1.0f64..4000.0,
+            x in 0.0f64..1.0,
+            y in 0.0f64..1.0,
+        ) {
+            // Two screens side by side, top aligned, of different heights.
+            let areas = [(0.0, 0.0, width, height), (width, 0.0, width, other_height)];
+            let on = (x * width, y * height);
+            prop_assert_eq!(nearest(&areas, on), on);
         }
 
         /// A move that stays on the output lands exactly where it says.
@@ -194,16 +249,30 @@ mod tests {
             dx in -50.0f64..50.0,
             dy in -50.0f64..50.0,
         ) {
-            let (nx, ny) = moved((x, y), (dx, dy), (1000.0, 1000.0));
+            let (nx, ny) = moved((x, y), (dx, dy), &[(0.0, 0.0, 1000.0, 1000.0)]);
             prop_assert_eq!(nx, x + dx);
             prop_assert_eq!(ny, y + dy);
         }
     }
 
     #[test]
+    fn a_place_no_screen_covers_goes_to_the_nearest_screen() {
+        // A 1080p screen beside a taller one: the box around both has a corner no screen has.
+        let areas = [(0.0, 0.0, 1920.0, 1080.0), (1920.0, 0.0, 1920.0, 2160.0)];
+        // Below the short screen and well inside its width: its lower edge is nearest.
+        assert_eq!(nearest(&areas, (100.0, 1500.0)), (100.0, 1080.0));
+        // Just left of the tall screen: that one's edge is nearer than the short screen's.
+        assert_eq!(nearest(&areas, (1900.0, 1500.0)), (1920.0, 1500.0));
+    }
+
+    #[test]
     fn a_device_reporting_nothing_sensible_moves_nothing() {
         assert_eq!(
-            moved((10.0, 20.0), (f64::NAN, f64::NAN), (100.0, 100.0)),
+            moved(
+                (10.0, 20.0),
+                (f64::NAN, f64::NAN),
+                &[(0.0, 0.0, 100.0, 100.0)]
+            ),
             (10.0, 20.0)
         );
     }

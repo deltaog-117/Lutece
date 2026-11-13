@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Kernel`: the interface of a kernel, the part of the core that decides where windows go (`handle`, `scene`, `snapshot`, `restore`, and the snapshot's `STATE_VERSION`), implemented by `Engine`. Code that only replays or records a session can be written once for any kernel.
+- `ScreenSettings` and `DrmBackend::open_with` (feature `drm`): every connected screen is opened, each on its own scanout engine, laid out left to right and top aligned in logical pixels; the screens named come first in the order named, each with its own `Scale`. `open` is `open_with` with no settings.
+- `WaylandBackend::set_output_scale`: a scale for one output, which `set_scale` then no longer sets. A window is told the scale of the output it covers most (`wp_fractional_scale` and `wl_output.scale`), a layer surface the scale of its output.
 - `InputSettings` and `SettingsError`: key repeat delay and rate, tap to click, natural scroll and pointer speed, refused when out of range (delay 100 to 5000 ms, rate 0 to 200, speed -1 to 1). `WaylandBackend::set_repeat` and `NestedBackend::set_input_settings` tell clients the repeat; `DrmBackend::set_input_settings` also sets the libinput devices, now and as they are plugged in. The repeat defaults are the old constants (600 ms, 25 a second), and a device setting left as `None` leaves the device alone.
 - `Redraw` and `DrmBackend::set_redraw`: the machine's screen is drawn only when something may have changed, and at least once a second (`OnChange`, the default), or every refresh as before (`Always`).
 - Title text: the title bar shows the window's title. Drawn with `ab_glyph` (new dependency of `lutece-wayland`) from JetBrains Mono Regular, shipped in the crate under the SIL Open Font License. Sized and coloured from the bar, cut with an ellipsis, kept per title in a bounded cache. No new `Style` field.
@@ -141,6 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland`: the stacking order of X11 windows under Xwayland follows the scene (`_NET_CLIENT_LIST_STACKING`), a fullscreen window above the others; it is redone when the order or a fullscreen state changes
 
 ### Changed
+- `DrmBackend` draws each screen on its own and keeps a pending page flip for each, so a screen that is slow or switched off does not hold the others back; `describe` lists every screen, left to right. With one monitor nothing differs.
+- The pointer is kept on the screens, not on the box around them: a place no screen covers (monitors of different heights) is moved to the nearest screen. Absolute devices are clamped the same way.
 - The Wayland backend reports the pointer entering a window as `Event::PointerEntered`, not `Event::FocusRequested`. The core focuses the window for both, so the screen behaves the same; a host that matched on `FocusRequested` to see the pointer must now match on the new event. The X11 backend still sends `FocusRequested` for it.
 - `Engine::scene` lays out in the area bars leave free and puts a fullscreen window on the whole output; floating windows are centered in the free area
 - `Scene` now holds the set of fullscreen windows; `Scene::try_new` is unchanged and starts with none

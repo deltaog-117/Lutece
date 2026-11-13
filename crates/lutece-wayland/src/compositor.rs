@@ -85,8 +85,11 @@ pub(crate) struct State {
     /// A layer surface that was clicked and takes the keyboard when it is asked to.
     pub(crate) layer_focus: Option<WlSurface>,
     pub(crate) dmabufs: Dmabufs,
-    /// How finely clients are told to draw.
+    /// How finely clients are told to draw on an output that has no scale of its own.
     pub(crate) scale: Scale,
+    /// The area and the scale of each output, to tell a window the scale of the screen it is
+    /// on. Empty until the outputs are set.
+    pub(crate) screen_scales: Vec<(Rect, Scale)>,
     pub(crate) popups: PopupManager,
     pub(crate) pointer: PointerState,
     /// Events for the core, waiting for the caller to collect them.
@@ -163,6 +166,7 @@ impl State {
             layer_focus: None,
             dmabufs: Dmabufs::new(),
             scale: Scale::ONE,
+            screen_scales: Vec::new(),
             popups: PopupManager::default(),
             pointer: PointerState::new(),
             events: Vec::new(),

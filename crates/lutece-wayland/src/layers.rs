@@ -11,6 +11,7 @@
 
 use crate::compositor::State;
 use crate::focus::Focus;
+use crate::scale::Scale;
 use crate::windows::Layer;
 use lutece::{Event, Insets, OutputId};
 use smithay::delegate_layer_shell;
@@ -245,9 +246,12 @@ impl State {
     /// Tells every layer surface which integer scale to draw at.
     fn refresh_layer_scale(&self) {
         for (_, output) in &self.output_ids {
+            // The output's own scale, which the layer map's sizes already follow.
+            let scale =
+                Scale::from_factor(output.current_scale().fractional_scale()).unwrap_or(self.scale);
             let map = layer_map_for_output(output);
             for layer in map.layers() {
-                self.tell_scale(layer.wl_surface());
+                self.tell_scale(layer.wl_surface(), scale);
             }
         }
     }

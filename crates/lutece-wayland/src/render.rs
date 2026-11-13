@@ -37,6 +37,24 @@ render_elements! {
     Picture=MemoryRenderBufferRenderElement<GlesRenderer>,
 }
 
+/// The part of the compositor's space one screen shows: where its top left corner is, in
+/// the logical pixels the core uses, and how many physical pixels each logical one is there.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct View {
+    pub(crate) origin: Point<i32, Logical>,
+    pub(crate) scale: Scale,
+}
+
+impl View {
+    /// The view of a screen that starts at the corner of the space.
+    pub(crate) fn whole(scale: Scale) -> Self {
+        Self {
+            origin: Point::from((0, 0)),
+            scale,
+        }
+    }
+}
+
 /// What to draw for every placed window and its popups, front to back, which is the
 /// order Smithay's drawing helpers expect. A hidden window is left out.
 ///

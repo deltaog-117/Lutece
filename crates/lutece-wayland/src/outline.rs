@@ -2,8 +2,7 @@
 //! without moving a window or touching a client.
 
 use crate::look::Shaders;
-use crate::render::SceneElement;
-use crate::scale::Scale;
+use crate::render::{SceneElement, View};
 use lutece::{Rect, Rgba};
 use smithay::utils::{Logical, Rectangle};
 
@@ -45,16 +44,18 @@ fn area(rect: Rect) -> Rectangle<i32, Logical> {
     )
 }
 
-/// What to draw for `outlines`, first on top. An empty outline, or a transparent or
-/// zero-width one, draws nothing.
-pub(crate) fn elements(outlines: &[Outline], shaders: &Shaders, scale: Scale) -> Vec<SceneElement> {
+/// What to draw for `outlines` on the screen `view` describes, first on top. An empty
+/// outline, or a transparent or zero-width one, draws nothing.
+pub(crate) fn elements(outlines: &[Outline], shaders: &Shaders, view: View) -> Vec<SceneElement> {
+    let scale = view.scale;
     outlines
         .iter()
         .filter(|outline| outline.width > 0 && outline.color.a > 0)
         .map(|outline| {
             let c = outline.color;
+            let rect = area(outline.rect);
             SceneElement::Border(shaders.border(
-                area(outline.rect),
+                Rectangle::new(rect.loc - view.origin, rect.size),
                 0.0,
                 (f64::from(outline.width) * scale.factor()) as f32,
                 [

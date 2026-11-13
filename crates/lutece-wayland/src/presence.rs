@@ -7,6 +7,7 @@
 //! rectangles; nothing here needs the renderer.
 
 use crate::compositor::State;
+use crate::scale::Scale;
 use lutece::{Rect, WinId};
 use smithay::desktop::PopupManager;
 use smithay::output::Output as WlOutput;
@@ -15,6 +16,7 @@ use smithay::utils::Transform;
 use smithay::wayland::compositor::{
     TraversalAction, get_parent, send_surface_state, with_states, with_surface_tree_downward,
 };
+use smithay::wayland::fractional_scale::with_fractional_scale;
 
 /// Whether two rectangles share at least one pixel. Touching edges share none.
 pub(crate) fn overlaps(a: Rect, b: Rect) -> bool {
@@ -26,10 +28,46 @@ pub(crate) fn overlaps(a: Rect, b: Rect) -> bool {
         && i64::from(b.y()) < end(a.y(), a.height())
 }
 
+/// How many pixels `a` and `b` share; none when they only touch.
+fn shared_area(a: Rect, b: Rect) -> u128 {
+    let span = |start_a: i32, len_a: u32, start_b: i32, len_b: u32| {
+        let low = i64::from(start_a).max(i64::from(start_b));
+        let high =
+            (i64::from(start_a) + i64::from(len_a)).min(i64::from(start_b) + i64::from(len_b));
+        u128::try_from(high - low).unwrap_or(0)
+    };
+    span(a.x(), a.width(), b.x(), b.width()) * span(a.y(), a.height(), b.y(), b.height())
+}
+
+/// The scale a window at `window` is drawn at: that of the screen it covers most, the
+/// earlier one when two share it equally. A window on no screen has the `fallback`, which is
+/// the scale outputs have when nothing says otherwise.
+///
+/// A window that straddles two screens is drawn on each at that screen's own scale, but its
+/// client can only be told one, and the one it covers most is the one it is looked at on.
+pub(crate) fn scale_for(screens: &[(Rect, Scale)], fallback: Scale, window: Rect) -> Scale {
+    let mut best: Option<(u128, Scale)> = None;
+    for &(area, scale) in screens {
+        let shared = shared_area(window, area);
+        if shared > 0 && best.is_none_or(|(most, _)| shared > most) {
+            best = Some((shared, scale));
+        }
+    }
+    best.map_or(fallback, |(_, scale)| scale)
+}
+
 impl State {
+    /// The scale window `id` is drawn at; see [`scale_for`]. A hidden window has the
+    /// default.
+    pub(crate) fn scale_of_window(&self, rect: Option<Rect>) -> Scale {
+        rect.map_or(self.scale, |rect| {
+            scale_for(&self.screen_scales, self.scale, rect)
+        })
+    }
+
     /// Enters the surfaces of window `id` on every output its rectangle overlaps and
-    /// leaves the others, then tells them the integer scale to draw at. A window that is
-    /// hidden is on no output.
+    /// leaves the others, then tells them the scale to draw at: the one of the output the
+    /// window is mostly on. A window that is hidden is on no output.
     ///
     /// Entering twice or leaving twice is harmless, so this is called whenever anything
     /// it depends on may have changed.
@@ -51,21 +89,28 @@ impl State {
                 }
             }
         }
-        let integer = self.scale.integer();
+        let scale = self.scale_of_window(entry.rect);
+        let integer = scale.integer();
         for surface in &surfaces {
             with_states(surface, |states| {
+                with_fractional_scale(states, |fractional| {
+                    fractional.set_preferred_scale(scale.factor());
+                });
                 send_surface_state(surface, states, integer, Transform::Normal);
             });
         }
     }
 
-    /// Tells the surface tree under `root`, and its popups, the integer scale to draw at.
+    /// Tells the surface tree under `root`, and its popups, the scale of the output it is on.
     /// Layer surfaces are put on their output by the layer map; this is the part of
     /// presence that is left for them.
-    pub(crate) fn tell_scale(&self, root: &WlSurface) {
-        let integer = self.scale.integer();
+    pub(crate) fn tell_scale(&self, root: &WlSurface, scale: Scale) {
+        let integer = scale.integer();
         for surface in window_surfaces(root) {
             with_states(&surface, |states| {
+                with_fractional_scale(states, |fractional| {
+                    fractional.set_preferred_scale(scale.factor());
+                });
                 send_surface_state(&surface, states, integer, Transform::Normal);
             });
         }
@@ -138,6 +183,83 @@ mod tests {
 
     fn rect(x: i32, y: i32, width: u32, height: u32) -> Rect {
         Rect::new(x, y, width, height).expect("a non-empty rectangle")
+    }
+
+    fn scale(factor: f64) -> Scale {
+        Scale::from_factor(factor).expect("a usable scale")
+    }
+
+    #[test]
+    fn a_window_on_no_screen_has_the_fallback_scale() {
+        let screens = [(rect(0, 0, 1000, 600), scale(2.0))];
+        assert_eq!(
+            scale_for(&screens, scale(1.0), rect(5000, 0, 100, 100)),
+            scale(1.0)
+        );
+        assert_eq!(scale_for(&[], scale(1.5), rect(0, 0, 10, 10)), scale(1.5));
+    }
+
+    #[test]
+    fn a_window_takes_the_scale_of_the_screen_it_covers_most() {
+        let screens = [
+            (rect(0, 0, 1000, 600), scale(1.0)),
+            (rect(1000, 0, 800, 600), scale(2.0)),
+        ];
+        // 100 pixels wide on the first screen, 300 on the second.
+        let window = rect(900, 0, 400, 100);
+        assert_eq!(scale_for(&screens, scale(1.0), window), scale(2.0));
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_earlier_screen() {
+        let screens = [
+            (rect(0, 0, 1000, 600), scale(1.5)),
+            (rect(1000, 0, 1000, 600), scale(2.0)),
+        ];
+        let window = rect(900, 0, 200, 100);
+        assert_eq!(scale_for(&screens, scale(1.0), window), scale(1.5));
+    }
+
+    proptest! {
+        /// Whatever the screens and the window, the answer is the fallback or the scale of a
+        /// screen the window really is on, and a window on none gets the fallback.
+        #[test]
+        fn the_scale_comes_from_a_screen_the_window_is_on(
+            screens in prop::collection::vec(
+                (-3000i32..3000, -3000i32..3000, 1u32..3000, 1u32..3000, 1u32..8),
+                0..5,
+            ),
+            wx in -3000i32..3000, wy in -3000i32..3000, ww in 1u32..3000, wh in 1u32..3000,
+        ) {
+            let screens: Vec<(Rect, Scale)> = screens
+                .into_iter()
+                .map(|(x, y, w, h, quarters)| (rect(x, y, w, h), scale(f64::from(quarters) / 4.0)))
+                .collect();
+            let window = rect(wx, wy, ww, wh);
+            let fallback = scale(16.0);
+            let chosen = scale_for(&screens, fallback, window);
+            let on: Vec<Scale> = screens
+                .iter()
+                .filter(|(area, _)| overlaps(window, *area))
+                .map(|&(_, s)| s)
+                .collect();
+            if on.is_empty() {
+                prop_assert_eq!(chosen, fallback);
+            } else {
+                prop_assert!(on.contains(&chosen));
+            }
+        }
+
+        /// Two rectangles share pixels exactly when they overlap.
+        #[test]
+        fn shared_pixels_mean_overlap(
+            ax in -2000i32..2000, ay in -2000i32..2000, aw in 1u32..2000, ah in 1u32..2000,
+            bx in -2000i32..2000, by in -2000i32..2000, bw in 1u32..2000, bh in 1u32..2000,
+        ) {
+            let (a, b) = (rect(ax, ay, aw, ah), rect(bx, by, bw, bh));
+            prop_assert_eq!(shared_area(a, b) > 0, overlaps(a, b));
+            prop_assert_eq!(shared_area(a, b), shared_area(b, a));
+        }
     }
 
     #[test]

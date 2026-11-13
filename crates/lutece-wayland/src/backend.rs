@@ -5,7 +5,7 @@ use crate::apply::{Flow, apply_changes, apply_effects};
 use crate::compositor::{ClientState, State};
 use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
-use crate::render::SceneElement;
+use crate::render::{SceneElement, View};
 use crate::scale::Scale;
 use crate::settings::InputSettings;
 use lutece::{
@@ -23,6 +23,7 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::utils::Point;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io;
 use std::sync::Arc;
@@ -72,6 +73,9 @@ pub struct WaylandBackend {
     scene: Scene,
     /// Invariant: each output id appears once.
     screens: Vec<Screen>,
+    /// The scale of an output that has one of its own; any other output has the one
+    /// [`set_scale`](Self::set_scale) gave.
+    scales: HashMap<OutputId, Scale>,
 }
 
 /// An output clients can see, and the global that announces it to them.
@@ -106,6 +110,7 @@ impl WaylandBackend {
             xwayland_enabled: false,
             scene: Scene::empty(),
             screens: Vec::new(),
+            scales: HashMap::new(),
         };
         backend.set_output_size(size)?;
         Ok(backend)
@@ -162,8 +167,9 @@ impl WaylandBackend {
         self.state.x_display
     }
 
-    /// Sets how many physical pixels one logical pixel is on the screen the compositor
-    /// is shown on. The core's rectangles stay logical, so nothing there changes; clients
+    /// Sets how many physical pixels one logical pixel is on every output that has no
+    /// scale of its own (see [`set_output_scale`](Self::set_output_scale)). The core's
+    /// rectangles stay logical, so nothing there changes; clients
     /// are told to draw that much finer: through `wp_fractional_scale` with the exact
     /// value, and through `wl_output` with it rounded up. Outputs keep their logical area
     /// and report the physical size that goes with it.
@@ -172,9 +178,40 @@ impl WaylandBackend {
     /// others stay at 1 and are enlarged when drawn.
     pub fn set_scale(&mut self, scale: Scale) {
         self.state.set_scale(scale);
-        for screen in &self.screens {
-            show_area(&screen.output, screen.rect, scale);
+        self.show_screens();
+    }
+
+    /// Gives one output a scale of its own, or takes it away with `None` so it follows
+    /// [`set_scale`](Self::set_scale) again. A window is told the scale of the output it is
+    /// mostly on, and is drawn on each output at that output's scale. The scale is kept for
+    /// an output that does not exist yet, and applies when it appears.
+    pub fn set_output_scale(&mut self, id: OutputId, scale: Option<Scale>) {
+        match scale {
+            Some(scale) => {
+                self.scales.insert(id, scale);
+            }
+            None => {
+                self.scales.remove(&id);
+            }
         }
+        self.show_screens();
+    }
+
+    /// The scale `id` is shown at: its own, or the one every output without one has.
+    fn scale_of(&self, id: OutputId) -> Scale {
+        self.scales.get(&id).copied().unwrap_or(self.state.scale)
+    }
+
+    /// Tells every output and every client what the scales are now.
+    fn show_screens(&mut self) {
+        for screen in &self.screens {
+            show_area(&screen.output, screen.rect, self.scale_of(screen.id));
+        }
+        self.state.screen_scales = self
+            .screens
+            .iter()
+            .map(|screen| (screen.rect, self.scale_of(screen.id)))
+            .collect();
         self.state.refresh_all_presence();
         self.state.arrange_layers();
     }
@@ -211,8 +248,8 @@ impl WaylandBackend {
         });
         self.state.leave_outputs(&gone);
         self.state.close_layers_of(&gone);
-        let scale = self.state.scale;
         for output in outputs {
+            let scale = self.scale_of(output.id);
             match self
                 .screens
                 .iter_mut()
@@ -256,6 +293,10 @@ impl WaylandBackend {
                 let screen = self.screens.iter().find(|screen| screen.id == output.id)?;
                 Some((output.id, screen.output.clone()))
             })
+            .collect();
+        self.state.screen_scales = outputs
+            .iter()
+            .map(|output| (output.rect, self.scale_of(output.id)))
             .collect();
         self.state.refresh_all_presence();
         // Layer surfaces keep to the new areas, and the core hears what they reserve.
@@ -389,7 +430,8 @@ impl WaylandBackend {
         Ok(flow)
     }
 
-    /// What to draw for the managed windows, front to back.
+    /// What to draw for the managed windows, front to back, on the screen `view` describes:
+    /// the part of the compositor's space that starts at `view.origin`, at `view.scale`.
     pub(crate) fn surface_elements(
         &self,
         renderer: &mut GlesRenderer,
@@ -397,25 +439,36 @@ impl WaylandBackend {
         titles: &mut crate::title::TitleCache,
         frame: smithay::utils::Size<i32, smithay::utils::Physical>,
         flipped: bool,
+        view: View,
     ) -> Vec<SceneElement> {
+        let layers: Vec<_> = self
+            .state
+            .layers()
+            .iter()
+            .map(|layer| layer.shifted(view.origin))
+            .collect();
         crate::render::surface_elements(
-            &self.state.layers(),
-            renderer,
-            self.state.scale,
-            shaders,
-            titles,
-            frame,
-            flipped,
+            &layers, renderer, view.scale, shaders, titles, frame, flipped,
         )
     }
 
-    /// What to draw for a cursor image a client supplied, if it did.
-    pub(crate) fn cursor_elements(&self, renderer: &mut GlesRenderer) -> Vec<SceneElement> {
+    /// What to draw for a cursor image a client supplied, if it did, on the screen `view`
+    /// describes.
+    pub(crate) fn cursor_elements(
+        &self,
+        renderer: &mut GlesRenderer,
+        view: View,
+    ) -> Vec<SceneElement> {
+        let at = self.state.pointer.location;
         crate::render::cursor_elements(
             &self.state.pointer.cursor,
-            self.state.pointer.location,
+            (
+                at.x - f64::from(view.origin.x),
+                at.y - f64::from(view.origin.y),
+            )
+                .into(),
             renderer,
-            self.state.scale,
+            view.scale,
         )
     }
 

@@ -2,13 +2,15 @@
 //! from the machine and serves clients on them.
 //!
 //! It is the hardware twin of the nested backend: the same clients, the same scene, the same
-//! calls, with a real screen and real devices in place of a window. The screen is one
-//! connected monitor at its best mode; the seat and the devices come from `libseat` and
+//! calls, with real screens and real devices in place of a window. Every connected monitor
+//! runs at its best mode and is placed left to right, each its own output with its own
+//! scale (see [`ScreenSettings`]); the seat and the devices come from `libseat` and
 //! `libinput`, so it must be started from a virtual terminal, not from inside another
 //! session.
 //!
-//! What is not done: a second monitor, a monitor plugged or unplugged while it runs, and the
-//! outputs' own scale.
+//! What is not done: a monitor plugged or unplugged while it runs (the screens are read once,
+//! when the session opens), a screen turned or placed anywhere but in a row, and a scale for
+//! the X11 programs of Xwayland, which draw at one.
 //!
 //! A frame is drawn only when something may have changed (see [`Redraw`]), and at least once a
 //! second whatever the signals say, so a change nobody reported shows up late and is never
@@ -20,21 +22,22 @@
 //! Started by hand, it has never been run on a screen; see `docs/live-check.md` in the window
 //! manager for what to look at first.
 
+use super::arrange::{ScreenSettings, arrange, order};
 use super::cursor;
 use super::keys::{Chord, Chords, Verdict};
-use super::pattern::{COLOR_FORMATS, Target, find_target, hardware, make_renderer};
+use super::pattern::{COLOR_FORMATS, Target, find_targets, hardware, make_renderer};
 use crate::apply::Flow;
 use crate::backend::WaylandBackend;
 use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
-use crate::input::{self, Input};
+use crate::input::{self, Area, Input};
 use crate::look::Shaders;
 use crate::outline::{self, Outline};
-use crate::render::SceneElement;
+use crate::render::{SceneElement, View};
 use crate::scale::Scale;
 use crate::settings::InputSettings;
 use crate::title::TitleCache;
-use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
+use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
 use smithay::backend::input::{InputEvent, KeyState};
@@ -51,9 +54,10 @@ use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::primary_gpu;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::drm::control::crtc;
 use smithay::reexports::input::{Device, Libinput};
 use smithay::reexports::rustix::fs::OFlags;
-use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
+use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Transform};
 use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 
@@ -83,11 +87,12 @@ struct Shared {
     inputs: Vec<Input>,
     /// Pauses and resumes of the session: a switch away from this virtual terminal and back.
     session: Vec<SessionEvent>,
-    /// Page flips that landed.
-    flips: u32,
+    /// The screens whose page flips landed, one entry for each flip.
+    flips: Vec<crtc::Handle>,
     /// The first thing that went wrong in a source, to be reported by the next call.
     failure: Option<Error>,
-    /// The area a pointer position is spread over, in logical pixels.
+    /// The box around every screen, which an absolute pointer position is spread over, in
+    /// logical pixels.
     bounds: (i32, i32),
     /// The settings new devices get, and the ones that are set again when they change.
     settings: InputSettings,
@@ -95,7 +100,34 @@ struct Shared {
     devices: Vec<Device>,
 }
 
-/// A [`WaylandBackend`] shown on a real screen, with the machine's own keyboard and pointer.
+/// One connected screen: the surface its pictures go to and what it shows of the space.
+struct Head {
+    /// The connector, for example `HDMIA-1`.
+    name: String,
+    crtc: crtc::Handle,
+    surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
+    /// The picture's size in pixels.
+    size: smithay::utils::Size<i32, Physical>,
+    scale: Scale,
+    /// The part of the space it shows, in logical pixels.
+    rect: Rect,
+    /// A frame was queued and its flip has not landed; the next frame waits for it.
+    flip_pending: bool,
+    /// The scene changed since this screen was last drawn.
+    stale: bool,
+}
+
+impl Head {
+    /// What this screen shows of the space.
+    fn view(&self) -> View {
+        View {
+            origin: Point::from((self.rect.x(), self.rect.y())),
+            scale: self.scale,
+        }
+    }
+}
+
+/// A [`WaylandBackend`] shown on the machine's real screens, with its own keyboard and pointer.
 ///
 /// Drive it like the nested backend: collect events with [`next_events`](Self::next_events),
 /// show the scene, carry out the effects, and draw with [`render`](Self::render). Stop when
@@ -110,34 +142,34 @@ pub struct DrmBackend {
     /// The pointer's arrow and its size in pixels.
     pointer: (MemoryRenderBuffer, (i32, i32)),
     renderer: GlesRenderer,
-    surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
+    /// Every connected screen, in the order they are laid out. Never empty.
+    heads: Vec<Head>,
+    /// The same screens as the pointer sees them.
+    areas: Vec<Area>,
     device: DrmDevice,
     libinput: Libinput,
     event_loop: EventLoop<'static, Shared>,
     shared: Shared,
     session: LibSeatSession,
-    size: smithay::utils::Size<i32, Physical>,
-    scale: Scale,
     started: Instant,
     closed: bool,
     /// Whether this virtual terminal is the one on the screen. Nothing is drawn or read when
     /// it is not.
     active: bool,
-    /// A frame was queued and its flip has not landed; the next frame waits for it.
-    flip_pending: bool,
     redraw: Redraw,
     /// When the last frame was queued, for the backstop.
     last_drawn: Instant,
     chords: Chords,
     outlines: Vec<Outline>,
     read_only: bool,
-    /// Where the connected screen is, for the one line that says what was opened.
+    /// What was opened, for the one line that says so.
     description: String,
 }
 
 impl DrmBackend {
-    /// Takes the seat, the primary GPU, the first connected screen and the input devices,
-    /// and starts listening for clients.
+    /// Takes the seat, the primary GPU, every connected screen and the input devices, and
+    /// starts listening for clients. The screens are in the machine's order and at a scale of
+    /// one; [`open_with`](Self::open_with) says otherwise.
     ///
     /// # Errors
     ///
@@ -146,6 +178,20 @@ impl DrmBackend {
     /// buffers or the input devices cannot be had; or another error if the compositor cannot
     /// start.
     pub fn open() -> Result<Self> {
+        Self::open_with(&ScreenSettings::default())
+    }
+
+    /// Like [`open`](Self::open), with `settings` for the order and the scale of the screens.
+    /// The screens are read once, here: one plugged or unplugged later is not noticed.
+    ///
+    /// Each screen is an output of its own, numbered from 0 in the order laid out, so the
+    /// first is the one the core shows its first workspace on. Windows are told the scale of
+    /// the screen they are mostly on, and each screen draws at its own.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`open`](Self::open).
+    pub fn open_with(settings: &ScreenSettings) -> Result<Self> {
         let event_loop: EventLoop<'static, Shared> =
             EventLoop::try_new().map_err(hardware("event loop"))?;
         let handle = event_loop.handle();
@@ -173,7 +219,7 @@ impl DrmBackend {
             .insert_source(
                 device_notifier,
                 |event, _, shared: &mut Shared| match event {
-                    DrmEvent::VBlank(_) => shared.flips += 1,
+                    DrmEvent::VBlank(crtc) => shared.flips.push(crtc),
                     DrmEvent::Error(error) => {
                         shared.failure.get_or_insert(hardware("page flip")(error));
                     }
@@ -181,10 +227,28 @@ impl DrmBackend {
             )
             .map_err(hardware("graphics events"))?;
 
-        let target = find_target(&device)?;
-        let drm_surface = device
-            .create_surface(target.crtc, target.mode, &[target.connector])
-            .map_err(hardware("screen surface"))?;
+        let mut targets = find_targets(&device)?;
+        let sequence = {
+            let names: Vec<&str> = targets.iter().map(|target| target.name.as_str()).collect();
+            order(&names, settings)
+        };
+        let mut listed: Vec<Option<Target>> = targets.drain(..).map(Some).collect();
+        let targets: Vec<Target> = sequence
+            .into_iter()
+            .filter_map(|index| listed[index].take())
+            .collect();
+        let scales: Vec<Scale> = targets
+            .iter()
+            .map(|target| settings.scale_of(&target.name).unwrap_or_default())
+            .collect();
+        let layout = arrange(
+            &targets
+                .iter()
+                .zip(&scales)
+                .map(|(target, scale)| (target.size, *scale))
+                .collect::<Vec<_>>(),
+        )?;
+
         let gbm = GbmDevice::new(fd).map_err(hardware("buffer allocator"))?;
         let mut renderer = make_renderer(gbm.clone())?;
         let formats = renderer
@@ -192,26 +256,90 @@ impl DrmBackend {
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-        let surface = GbmBufferedSurface::new(drm_surface, allocator, &COLOR_FORMATS, formats)
-            .map_err(hardware("screen buffers"))?;
+        let mut heads = Vec::with_capacity(targets.len());
+        let mut described = Vec::with_capacity(targets.len());
+        for ((target, scale), rect) in targets.into_iter().zip(scales).zip(layout) {
+            let drm_surface = device
+                .create_surface(target.crtc, target.mode, &[target.connector])
+                .map_err(hardware("screen surface"))?;
+            let allocator = GbmAllocator::new(
+                gbm.clone(),
+                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+            );
+            let surface =
+                GbmBufferedSurface::new(drm_surface, allocator, &COLOR_FORMATS, formats.clone())
+                    .map_err(hardware("screen buffers"))?;
+            let [width, height] = target.size;
+            let mut line = format!(
+                "{} at {width}x{height} {} Hz",
+                target.name, target.refresh_hz
+            );
+            if scale != Scale::ONE {
+                line.push_str(&format!(" scale {}", scale.factor()));
+            }
+            described.push(line);
+            heads.push(Head {
+                name: target.name,
+                crtc: target.crtc,
+                surface,
+                size: smithay::utils::Size::from((i32::from(width), i32::from(height))),
+                scale,
+                rect,
+                flip_pending: false,
+                stale: true,
+            });
+        }
+        // A name the user gave that no connected screen has: said, not an error, so one
+        // configuration serves a laptop on and off its dock.
+        let missing: Vec<&str> = settings
+            .names()
+            .filter(|name| heads.iter().all(|head| head.name != *name))
+            .collect();
+        let mut description = described.join(", ");
+        if !missing.is_empty() {
+            description.push_str(&format!(
+                "; no connected screen is named {}",
+                missing.join(", ")
+            ));
+        }
 
         let libinput = open_input(&session, &handle)?;
 
-        let Target {
-            name,
-            size: [width, height],
-            refresh_hz,
-            ..
-        } = target;
-        let scale = Scale::default();
-        let logical = Size::new(u32::from(width), u32::from(height))?;
-        let mut wayland = WaylandBackend::bind(logical)?;
-        wayland.set_scale(scale);
-        wayland.set_outputs(&[Output {
-            id: OutputId::new(0),
-            rect: Rect::new(0, 0, logical.width(), logical.height())?,
-        }]);
+        let areas: Vec<Area> = heads
+            .iter()
+            .map(|head| {
+                (
+                    f64::from(head.rect.x()),
+                    f64::from(head.rect.y()),
+                    f64::from(head.rect.width()),
+                    f64::from(head.rect.height()),
+                )
+            })
+            .collect();
+        let outputs: Vec<Output> = (0u32..)
+            .zip(&heads)
+            .map(|(id, head)| Output {
+                id: OutputId::new(id),
+                rect: head.rect,
+            })
+            .collect();
+        let bounds = (
+            outputs
+                .iter()
+                .map(|output| far_edge(output.rect.x(), output.rect.width()))
+                .max(),
+            outputs
+                .iter()
+                .map(|output| far_edge(output.rect.y(), output.rect.height()))
+                .max(),
+        );
+
+        // `bind` makes the one output the compositor starts with; the real set replaces it.
+        let mut wayland = WaylandBackend::bind(heads[0].rect.size())?;
+        for (id, head) in (0u32..).zip(&heads) {
+            wayland.set_output_scale(OutputId::new(id), Some(head.scale));
+        }
+        wayland.set_outputs(&outputs);
         let shaders = Shaders::compile(&mut renderer).map_err(hardware("shaders"))?;
         if let Some(support) = DmabufSupport::of(&renderer) {
             wayland.enable_dmabuf(&support)?;
@@ -223,36 +351,36 @@ impl DrmBackend {
             titles: TitleCache::new(),
             pointer: cursor::sprite(),
             renderer,
-            surface,
+            heads,
+            areas,
             device,
             libinput,
             event_loop,
             shared: Shared {
                 inputs: Vec::new(),
                 session: Vec::new(),
-                flips: 0,
+                flips: Vec::new(),
                 failure: None,
-                bounds: (i32::from(width), i32::from(height)),
+                bounds: (bounds.0.unwrap_or(0), bounds.1.unwrap_or(0)),
                 settings: InputSettings::default(),
                 devices: Vec::new(),
             },
             session,
-            size: smithay::utils::Size::from((i32::from(width), i32::from(height))),
-            scale,
             started: Instant::now(),
             closed: false,
             active: true,
-            flip_pending: false,
             redraw: Redraw::default(),
             last_drawn: Instant::now(),
             chords: Chords::default(),
             outlines: Vec::new(),
             read_only: false,
-            description: format!("{name} at {width}x{height} {refresh_hz} Hz"),
+            description,
         })
     }
 
-    /// The screen that was opened, for example `HDMIA-1 at 1920x1080 60 Hz`.
+    /// The screens that were opened, for example `HDMIA-1 at 1920x1080 60 Hz, eDP-1 at
+    /// 2560x1600 60 Hz scale 1.5`, in the order they are laid out, left to right. When the
+    /// settings named a screen that is not connected, it is said after a semicolon.
     #[must_use]
     pub fn describe(&self) -> &str {
         &self.description
@@ -351,10 +479,6 @@ impl DrmBackend {
         self.follow_session()?;
         self.follow_flips()?;
 
-        let bounds = (
-            f64::from(self.shared.bounds.0),
-            f64::from(self.shared.bounds.1),
-        );
         let mut events = Vec::new();
         for input in std::mem::take(&mut self.shared.inputs) {
             if !self.active {
@@ -368,7 +492,7 @@ impl DrmBackend {
             } else {
                 // The pointer's arrow, or a client's answer to a key, may now look different.
                 self.wayland.mark_damage();
-                if let Some(event) = input::apply(&mut self.wayland, input, bounds) {
+                if let Some(event) = input::apply(&mut self.wayland, input, &self.areas) {
                     events.push(event);
                 }
             }
@@ -398,69 +522,39 @@ impl DrmBackend {
         self.wayland.apply_effects(effects)
     }
 
-    /// Draws a frame on the screen, unless the last one has not been shown yet or this
-    /// terminal is not the one on the screen; then it does nothing and the next call tries
-    /// again.
+    /// Draws a frame on every screen whose last one has been shown, unless this terminal is
+    /// not the one on the screen; then it does nothing and the next call tries again.
+    ///
+    /// A screen still waiting for its last flip is left alone and drawn on a later call, so a
+    /// slow or switched-off monitor does not hold the others back.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Render`] or [`Error::Drm`] if the frame cannot be drawn or queued.
+    /// Returns [`Error::Render`] or [`Error::Drm`] if a frame cannot be drawn or queued.
     pub fn render(&mut self) -> Result<()> {
-        if !self.active || self.flip_pending {
+        if !self.active {
             return Ok(());
         }
         let now = Instant::now();
-        if !self.frame_due(now) {
+        if self.frame_due(now) {
+            // The change is handed to the screens: each draws it when its turn comes, and
+            // the damage is spent.
+            for head in &mut self.heads {
+                head.stale = true;
+            }
+            self.wayland.clear_damage();
+            self.last_drawn = now;
+        }
+        let mut drew = false;
+        for index in 0..self.heads.len() {
+            if self.heads[index].stale && !self.heads[index].flip_pending {
+                self.draw(index)?;
+                drew = true;
+            }
+        }
+        if !drew {
             return Ok(());
         }
-        let size = self.size;
-        let whole = [Rectangle::from_size(size)];
-
-        // Front to back: outlines, the pointer, a client's own pointer image, then windows.
-        let mut elements = outline::elements(&self.outlines, &self.shaders, self.scale);
-        elements.extend(self.pointer_elements());
-        elements.extend(self.wayland.cursor_elements(&mut self.renderer));
-        // The buffers are scanned out with the first row at the top, which is how the
-        // elements are laid out, so nothing is drawn flipped.
-        elements.extend(self.wayland.surface_elements(
-            &mut self.renderer,
-            &self.shaders,
-            &mut self.titles,
-            size,
-            false,
-        ));
-
-        let (mut buffer, _age) = self
-            .surface
-            .next_buffer()
-            .map_err(hardware("next buffer"))?;
-        let sync = {
-            let mut target = self
-                .renderer
-                .bind(&mut buffer)
-                .map_err(hardware("binding the buffer"))?;
-            let mut frame = self
-                .renderer
-                .render(&mut target, size, Transform::Normal)
-                .map_err(hardware("starting a frame"))?;
-            frame
-                .clear(BACKGROUND, &whole)
-                .map_err(hardware("clearing the frame"))?;
-            draw_render_elements::<GlesRenderer, _, _>(
-                &mut frame,
-                self.scale.factor(),
-                &elements,
-                &whole,
-            )
-            .map_err(hardware("drawing the frame"))?;
-            frame.finish().map_err(hardware("finishing the frame"))?
-        };
-        self.surface
-            .queue_buffer(Some(sync), None, ())
-            .map_err(hardware("queueing the frame"))?;
-        self.flip_pending = true;
-        self.wayland.clear_damage();
-        self.last_drawn = now;
 
         // Milliseconds wrap after about 49 days, which the protocol allows.
         let time_ms = u32::try_from(self.started.elapsed().as_millis() % u128::from(u32::MAX))
@@ -479,19 +573,81 @@ impl DrmBackend {
         )
     }
 
-    /// The arrow, where the pointer is, when the focused client wants a named cursor. A client
-    /// that draws its own is drawn with the windows, and one that wants none gets none.
-    fn pointer_elements(&mut self) -> Option<SceneElement> {
+    /// Draws one screen: the outlines, the pointer and the windows as that screen shows them,
+    /// and queues the picture for its next flip.
+    fn draw(&mut self, index: usize) -> Result<()> {
+        let view = self.heads[index].view();
+        let size = self.heads[index].size;
+        let whole = [Rectangle::from_size(size)];
+
+        // Front to back: outlines, the pointer, a client's own pointer image, then windows.
+        // A screen draws all of them; what lies outside it falls outside the frame.
+        let mut elements = outline::elements(&self.outlines, &self.shaders, view);
+        elements.extend(self.pointer_elements(view));
+        elements.extend(self.wayland.cursor_elements(&mut self.renderer, view));
+        // The buffers are scanned out with the first row at the top, which is how the
+        // elements are laid out, so nothing is drawn flipped.
+        elements.extend(self.wayland.surface_elements(
+            &mut self.renderer,
+            &self.shaders,
+            &mut self.titles,
+            size,
+            false,
+            view,
+        ));
+
+        let head = &mut self.heads[index];
+        let (mut buffer, _age) = head
+            .surface
+            .next_buffer()
+            .map_err(hardware("next buffer"))?;
+        let sync = {
+            let mut target = self
+                .renderer
+                .bind(&mut buffer)
+                .map_err(hardware("binding the buffer"))?;
+            let mut frame = self
+                .renderer
+                .render(&mut target, size, Transform::Normal)
+                .map_err(hardware("starting a frame"))?;
+            frame
+                .clear(BACKGROUND, &whole)
+                .map_err(hardware("clearing the frame"))?;
+            draw_render_elements::<GlesRenderer, _, _>(
+                &mut frame,
+                view.scale.factor(),
+                &elements,
+                &whole,
+            )
+            .map_err(hardware("drawing the frame"))?;
+            frame.finish().map_err(hardware("finishing the frame"))?
+        };
+        head.surface
+            .queue_buffer(Some(sync), None, ())
+            .map_err(hardware("queueing the frame"))?;
+        head.flip_pending = true;
+        head.stale = false;
+        Ok(())
+    }
+
+    /// The arrow, where the pointer is on the screen `view` describes, when the focused
+    /// client wants a named cursor. A client that draws its own is drawn with the windows,
+    /// and one that wants none gets none.
+    fn pointer_elements(&mut self, view: View) -> Option<SceneElement> {
         if !matches!(self.wayland.cursor(), CursorImageStatus::Named(_)) {
             return None;
         }
         let (x, y) = self.wayland.pointer_location();
         let (buffer, size) = &self.pointer;
+        let factor = view.scale.factor();
         // A pointer sprite that cannot be uploaded leaves no pointer; it must not cost the
         // frame.
         MemoryRenderBufferRenderElement::from_buffer(
             &mut self.renderer,
-            (x * self.scale.factor(), y * self.scale.factor()),
+            (
+                (x - f64::from(view.origin.x)) * factor,
+                (y - f64::from(view.origin.y)) * factor,
+            ),
             buffer,
             None,
             None,
@@ -540,8 +696,11 @@ impl DrmBackend {
                         .activate(true)
                         .map_err(hardware("taking the screen back"))?;
                     // Whatever was queued before the switch will never land.
-                    self.surface.reset_buffers();
-                    self.flip_pending = false;
+                    for head in &mut self.heads {
+                        head.surface.reset_buffers();
+                        head.flip_pending = false;
+                        head.stale = true;
+                    }
                     self.active = true;
                     self.wayland.mark_damage();
                 }
@@ -552,15 +711,18 @@ impl DrmBackend {
 
     /// Notes the flips that landed, so the next frame can be drawn.
     fn follow_flips(&mut self) -> Result<()> {
-        for _ in 0..std::mem::take(&mut self.shared.flips) {
+        for crtc in std::mem::take(&mut self.shared.flips) {
+            let Some(head) = self.heads.iter_mut().find(|head| head.crtc == crtc) else {
+                continue;
+            };
             // `None` is the flip of the mode setting itself, which no frame of ours is waiting on.
-            if self
+            if head
                 .surface
                 .frame_submitted()
                 .map_err(hardware("finishing a flip"))?
                 .is_some()
             {
-                self.flip_pending = false;
+                head.flip_pending = false;
             }
         }
         Ok(())
@@ -599,6 +761,11 @@ fn open_input(
         )
         .map_err(hardware("input events"))?;
     Ok(libinput)
+}
+
+/// Where an edge that starts at `start` and is `length` long ends, kept inside `i32`.
+fn far_edge(start: i32, length: u32) -> i32 {
+    i32::try_from(i64::from(start) + i64::from(length)).unwrap_or(i32::MAX)
 }
 
 /// Whether a frame is due: always in [`Redraw::Always`]; otherwise when `changed` (something

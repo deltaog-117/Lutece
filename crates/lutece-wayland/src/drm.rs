@@ -6,13 +6,18 @@
 //! flips a colour that turns once around the wheel; it needs a real virtual terminal.
 //! What it proves is that the seat, the mode setting, the buffers and the page flips work
 //! on this machine, which a later session backend builds on.
+//!
+//! [`DrmBackend`] is that session backend: it drives every connected screen, side by side,
+//! each at its own scale ([`ScreenSettings`]).
 
+mod arrange;
 mod cursor;
 mod keys;
 mod pattern;
 mod pick;
 mod session;
 
+pub use arrange::ScreenSettings;
 pub use pattern::{PatternReport, show_test_pattern};
 pub use pick::{ModeInfo, best_mode, pattern_color, pick_crtc};
 pub use session::{DrmBackend, Redraw};
