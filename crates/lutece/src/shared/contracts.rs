@@ -5,6 +5,7 @@
 
 pub mod effect;
 pub mod event;
+pub mod kernel;
 pub mod scene;
 pub mod scene_diff;
 pub mod style;

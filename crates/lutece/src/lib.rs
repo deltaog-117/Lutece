@@ -21,6 +21,7 @@ pub use shared::contracts::effect::{Effect, SpawnCommand};
 pub use shared::contracts::event::{
     Event, KeyPress, Keysym, ManageDecision, Modifiers, Output, PropertyTarget, WindowInfo,
 };
+pub use shared::contracts::kernel::Kernel;
 pub use shared::contracts::scene::{Placement, Scene};
 pub use shared::contracts::scene_diff::{Change, diff};
 pub use shared::contracts::style::{Border, Curve, Rgba, Shadow, Style, TitleBar, Transition};

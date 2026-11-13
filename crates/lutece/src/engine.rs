@@ -6,6 +6,7 @@
 
 mod external;
 mod handle;
+mod kernel;
 mod scene_builder;
 mod snapshot;
 
