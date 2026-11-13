@@ -10,6 +10,7 @@ mod pointer;
 mod popup;
 mod presence;
 mod protocol;
+mod repeat;
 mod scale;
 mod support;
 mod window_info;

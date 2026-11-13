@@ -12,6 +12,7 @@ use crate::input;
 use crate::look::Shaders;
 use crate::outline::{self, Outline};
 use crate::scale::Scale;
+use crate::settings::InputSettings;
 use crate::title::TitleCache;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
 use smithay::backend::egl::ffi;
@@ -109,6 +110,12 @@ impl NestedBackend {
             outlines: Vec::new(),
             read_only: false,
         })
+    }
+
+    /// Sets how a held key repeats. The window's own pointer and keyboard come from the host
+    /// compositor, so the device settings of [`InputSettings`] have no effect here.
+    pub fn set_input_settings(&mut self, settings: &InputSettings) {
+        self.wayland.set_repeat(settings);
     }
 
     /// Sets the outlines drawn over the windows and the cursor's image, replacing the ones
@@ -246,8 +253,7 @@ impl NestedBackend {
         {
             let (renderer, mut framebuffer) = self.graphics.bind().map_err(render_error)?;
             if !self.unthrottled {
-                set_swap_interval(renderer)?;
-                self.unthrottled = true;
+                self.unthrottled = set_swap_interval(renderer);
             }
             // Front to back: outlines, then the cursor's image, then the windows.
             let mut elements = outline::elements(&self.outlines, &self.shaders, self.scale);
@@ -349,18 +355,18 @@ fn size_of(
 /// whole loop (events, commands, plugin supervision) while another window covers this
 /// one. The loop is paced by [`WAIT_SLICE`], so drawing does not spin.
 ///
-/// The window's surface must be current, which it is right after `bind`.
+/// The window's surface must be current, which it is right after `bind`. Returns whether
+/// the interval was set. It is not fatal when it was not: on some drivers the surface is
+/// not valid for this call on the first frames (`EGL_BAD_SURFACE`), so the caller asks
+/// again on the next frame, and a driver that never accepts it only loses the protection
+/// against the stall above.
 #[allow(unsafe_code)]
-fn set_swap_interval(renderer: &GlesRenderer) -> Result<()> {
+fn set_swap_interval(renderer: &GlesRenderer) -> bool {
     let display = renderer.egl_context().display().get_display_handle();
     // SAFETY: `display` is the live EGL display this renderer was made from, held by the
     // `Arc` for the whole call, and the window's surface is current on this thread.
     let done = unsafe { ffi::egl::SwapInterval(display.handle, 0) };
-    if done == ffi::egl::TRUE {
-        Ok(())
-    } else {
-        Err(render_error("cannot set the swap interval"))
-    }
+    done == ffi::egl::TRUE
 }
 
 #[cfg(test)]

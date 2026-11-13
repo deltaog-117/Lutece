@@ -125,6 +125,17 @@ pub(crate) struct Windows {
 }
 
 impl Windows {
+    /// Whether any window is still on its way to its rectangle at `now`, so the screen must
+    /// keep being drawn for it to be seen moving.
+    #[cfg(feature = "drm")]
+    pub(crate) fn animating(&self, now: Instant) -> bool {
+        self.managed.values().any(|entry| {
+            entry
+                .animation
+                .is_some_and(|animation| !animation.finished(now))
+        })
+    }
+
     /// Remembers a toplevel until its first commit.
     pub(crate) fn track(&mut self, toplevel: ToplevelSurface) {
         self.pending.push(toplevel);

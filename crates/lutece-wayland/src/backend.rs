@@ -7,6 +7,7 @@ use crate::dmabuf::DmabufSupport;
 use crate::error::{Error, Result};
 use crate::render::SceneElement;
 use crate::scale::Scale;
+use crate::settings::InputSettings;
 use lutece::{
     Effect, Event, KeyPress, Modifiers, Output, OutputId, Point as CorePoint, Rect, Scene, Size,
     diff,
@@ -26,6 +27,8 @@ use std::ffi::OsStr;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(feature = "drm")]
+use std::time::Instant;
 
 /// The socket names tried are `lutece-0` up to `lutece-31`, so a nested compositor never
 /// takes the name of the session it runs in.
@@ -260,6 +263,34 @@ impl WaylandBackend {
         self.state.report_outputs(outputs.to_vec());
     }
 
+    /// Tells every client how fast a held key repeats, now and for clients that start later.
+    pub fn set_repeat(&mut self, settings: &InputSettings) {
+        let Some(keyboard) = self.state.seat.get_keyboard() else {
+            return;
+        };
+        let (rate, delay) = settings.repeat_info();
+        keyboard.change_repeat_info(rate, delay);
+    }
+
+    /// Whether something a client or the pointer shows may have changed since
+    /// [`clear_damage`](Self::clear_damage), or a window is still gliding at `now`.
+    #[cfg(feature = "drm")]
+    pub(crate) fn needs_frame(&self, now: Instant) -> bool {
+        self.state.damaged || self.state.windows.animating(now)
+    }
+
+    /// Notes that a frame was drawn, so the next one waits for a change.
+    #[cfg(feature = "drm")]
+    pub(crate) fn clear_damage(&mut self) {
+        self.state.damaged = false;
+    }
+
+    /// Notes that the picture may have changed for a reason only the caller knows.
+    #[cfg(feature = "drm")]
+    pub(crate) fn mark_damage(&mut self) {
+        self.state.damaged = true;
+    }
+
     /// Sets the key combinations the core wants for itself. Clients never see them.
     pub fn grab_keys(&mut self, presses: impl IntoIterator<Item = KeyPress>) {
         self.state.grabs = presses.into_iter().collect();
@@ -336,6 +367,8 @@ impl WaylandBackend {
     /// Returns an error if a client cannot be written to.
     pub fn apply_scene(&mut self, scene: &Scene) -> Result<()> {
         let changes = diff(&self.scene, scene);
+        // Asked on every turn of the caller's loop, so only a real change counts as damage.
+        self.state.damaged |= !changes.is_empty();
         apply_changes(&mut self.state, &changes);
         self.scene = scene.clone();
         self.display.flush_clients()?;
@@ -350,6 +383,7 @@ impl WaylandBackend {
     /// client cannot be written to.
     pub fn apply_effects(&mut self, effects: &[Effect]) -> Result<Flow> {
         let socket = self.socket_name().to_owned();
+        self.state.damaged |= !effects.is_empty();
         let flow = apply_effects(&mut self.state, &socket, effects)?;
         self.display.flush_clients()?;
         Ok(flow)

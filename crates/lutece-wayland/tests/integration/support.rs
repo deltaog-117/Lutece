@@ -150,6 +150,8 @@ struct Observed {
     windows: Vec<Window>,
     popups: Vec<Popup>,
     keyboard_enters: usize,
+    /// The last repeat rate and delay the compositor announced for the keyboard.
+    repeat_info: Option<(i32, i32)>,
     keyboard_serial: u32,
     keys: usize,
     pointer_enters: usize,
@@ -713,6 +715,11 @@ impl TestClient {
         self.observed.keyboard_enters
     }
 
+    /// The repeat rate and delay the client was last told, if it was told any.
+    pub fn repeat_info(&self) -> Option<(i32, i32)> {
+        self.observed.repeat_info
+    }
+
     /// Keys the client has been sent.
     pub fn keys(&self) -> usize {
         self.observed.keys
@@ -995,6 +1002,9 @@ impl Dispatch<WlKeyboard, ()> for Observed {
                 }
             }
             wl_keyboard::Event::Key { .. } => state.keys += 1,
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                state.repeat_info = Some((rate, delay));
+            }
             _ => {}
         }
     }

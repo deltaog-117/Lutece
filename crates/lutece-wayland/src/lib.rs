@@ -42,6 +42,7 @@ mod presence;
 mod render;
 mod scale;
 mod selection;
+mod settings;
 mod title;
 mod translate;
 mod windows;
@@ -52,9 +53,11 @@ pub use backend::{ButtonAction, KeyAction, WaylandBackend};
 pub use dmabuf::DmabufSupport;
 #[cfg(feature = "drm")]
 pub use drm::{
-    DrmBackend, ModeInfo, PatternReport, best_mode, pattern_color, pick_crtc, show_test_pattern,
+    DrmBackend, ModeInfo, PatternReport, Redraw, best_mode, pattern_color, pick_crtc,
+    show_test_pattern,
 };
 pub use error::{Error, Result};
 pub use nested::NestedBackend;
 pub use outline::Outline;
 pub use scale::Scale;
+pub use settings::{InputSettings, SettingsError};

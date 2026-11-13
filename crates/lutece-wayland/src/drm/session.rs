@@ -7,9 +7,13 @@
 //! `libinput`, so it must be started from a virtual terminal, not from inside another
 //! session.
 //!
-//! What is not done: a second monitor, a monitor plugged or unplugged while it runs, the
-//! outputs' own scale, and pointer or keyboard settings (tap to click, repeat). A frame is
-//! drawn every refresh, whether anything changed or not.
+//! What is not done: a second monitor, a monitor plugged or unplugged while it runs, and the
+//! outputs' own scale.
+//!
+//! A frame is drawn only when something may have changed (see [`Redraw`]), and at least once a
+//! second whatever the signals say, so a change nobody reported shows up late and is never
+//! lost. Settings for the keyboard's repeat and for touchpads and mice come from
+//! [`InputSettings`](crate::InputSettings).
 //!
 //! Getting out is never left to the window manager: see [`super::keys`].
 //!
@@ -28,11 +32,12 @@ use crate::look::Shaders;
 use crate::outline::{self, Outline};
 use crate::render::SceneElement;
 use crate::scale::Scale;
+use crate::settings::InputSettings;
 use crate::title::TitleCache;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene, Size};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
-use smithay::backend::input::KeyState;
+use smithay::backend::input::{InputEvent, KeyState};
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::{
@@ -46,7 +51,7 @@ use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::primary_gpu;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::input::Libinput;
+use smithay::reexports::input::{Device, Libinput};
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
 use std::ffi::OsStr;
@@ -56,6 +61,21 @@ const BACKGROUND: Color32F = Color32F::new(0.10, 0.12, 0.16, 1.0);
 /// Devices and clients are watched in turns, so waiting on the clients for long would leave
 /// the keyboard deaf. This bounds the latency of a key press.
 const WAIT_SLICE: Duration = Duration::from_millis(8);
+/// The longest the screen goes without a new frame in [`Redraw::OnChange`]. It bounds how long
+/// a change that nothing reported stays unseen.
+const BACKSTOP: Duration = Duration::from_secs(1);
+
+/// When the screen is drawn again.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Redraw {
+    /// Only after something may have changed: a client committed, the scene changed, a window
+    /// is moving, the pointer or a key was used. Never less than once a second.
+    #[default]
+    OnChange,
+    /// Every refresh, whether anything changed or not.
+    Always,
+}
 
 /// What the event sources leave for the backend to act on once they have been drained.
 struct Shared {
@@ -69,6 +89,10 @@ struct Shared {
     failure: Option<Error>,
     /// The area a pointer position is spread over, in logical pixels.
     bounds: (i32, i32),
+    /// The settings new devices get, and the ones that are set again when they change.
+    settings: InputSettings,
+    /// The devices the seat has now, to set again when the settings change.
+    devices: Vec<Device>,
 }
 
 /// A [`WaylandBackend`] shown on a real screen, with the machine's own keyboard and pointer.
@@ -101,6 +125,9 @@ pub struct DrmBackend {
     active: bool,
     /// A frame was queued and its flip has not landed; the next frame waits for it.
     flip_pending: bool,
+    redraw: Redraw,
+    /// When the last frame was queued, for the backstop.
+    last_drawn: Instant,
     chords: Chords,
     outlines: Vec<Outline>,
     read_only: bool,
@@ -206,6 +233,8 @@ impl DrmBackend {
                 flips: 0,
                 failure: None,
                 bounds: (i32::from(width), i32::from(height)),
+                settings: InputSettings::default(),
+                devices: Vec::new(),
             },
             session,
             size: smithay::utils::Size::from((i32::from(width), i32::from(height))),
@@ -214,6 +243,8 @@ impl DrmBackend {
             closed: false,
             active: true,
             flip_pending: false,
+            redraw: Redraw::default(),
+            last_drawn: Instant::now(),
             chords: Chords::default(),
             outlines: Vec::new(),
             read_only: false,
@@ -231,6 +262,24 @@ impl DrmBackend {
     /// them away. They are only drawn: no window moves and no client is told.
     pub fn set_outlines(&mut self, outlines: Vec<Outline>) {
         self.outlines = outlines;
+        self.wayland.mark_damage();
+    }
+
+    /// Sets when the screen is drawn again; see [`Redraw`].
+    pub fn set_redraw(&mut self, redraw: Redraw) {
+        self.redraw = redraw;
+        self.wayland.mark_damage();
+    }
+
+    /// Sets how the keyboard repeats and how the touchpads and mice behave, on the devices
+    /// there are and on the ones plugged in later. A setting a device does not have, such as
+    /// tap to click on a mouse, leaves that device as it is.
+    pub fn set_input_settings(&mut self, settings: InputSettings) {
+        self.wayland.set_repeat(&settings);
+        self.shared.settings = settings;
+        for device in &mut self.shared.devices {
+            apply_device(device, &settings);
+        }
     }
 
     /// Makes the keyboard and the pointer do nothing, or take them again. While read-only, no
@@ -316,11 +365,18 @@ impl DrmBackend {
             };
             if self.read_only {
                 input::apply_read_only(&mut self.wayland, input);
-            } else if let Some(event) = input::apply(&mut self.wayland, input, bounds) {
-                events.push(event);
+            } else {
+                // The pointer's arrow, or a client's answer to a key, may now look different.
+                self.wayland.mark_damage();
+                if let Some(event) = input::apply(&mut self.wayland, input, bounds) {
+                    events.push(event);
+                }
             }
         }
         events.extend(self.wayland.next_events(timeout.min(WAIT_SLICE))?);
+        if !events.is_empty() {
+            self.wayland.mark_damage();
+        }
         Ok(events)
     }
 
@@ -351,6 +407,10 @@ impl DrmBackend {
     /// Returns [`Error::Render`] or [`Error::Drm`] if the frame cannot be drawn or queued.
     pub fn render(&mut self) -> Result<()> {
         if !self.active || self.flip_pending {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if !self.frame_due(now) {
             return Ok(());
         }
         let size = self.size;
@@ -399,6 +459,8 @@ impl DrmBackend {
             .queue_buffer(Some(sync), None, ())
             .map_err(hardware("queueing the frame"))?;
         self.flip_pending = true;
+        self.wayland.clear_damage();
+        self.last_drawn = now;
 
         // Milliseconds wrap after about 49 days, which the protocol allows.
         let time_ms = u32::try_from(self.started.elapsed().as_millis() % u128::from(u32::MAX))
@@ -408,6 +470,15 @@ impl DrmBackend {
 }
 
 impl DrmBackend {
+    /// Whether a frame should be drawn at `now`; see [`frame_due`].
+    fn frame_due(&self, now: Instant) -> bool {
+        frame_due(
+            self.redraw,
+            self.wayland.needs_frame(now),
+            now.duration_since(self.last_drawn),
+        )
+    }
+
     /// The arrow, where the pointer is, when the focused client wants a named cursor. A client
     /// that draws its own is drawn with the windows, and one that wants none gets none.
     fn pointer_elements(&mut self) -> Option<SceneElement> {
@@ -472,6 +543,7 @@ impl DrmBackend {
                     self.surface.reset_buffers();
                     self.flip_pending = false;
                     self.active = true;
+                    self.wayland.mark_damage();
                 }
             }
         }
@@ -508,6 +580,17 @@ fn open_input(
         .insert_source(
             LibinputInputBackend::new(libinput.clone()),
             |event, (), shared: &mut Shared| {
+                match &event {
+                    InputEvent::DeviceAdded { device } => {
+                        let mut device = device.clone();
+                        apply_device(&mut device, &shared.settings);
+                        shared.devices.push(device);
+                    }
+                    InputEvent::DeviceRemoved { device } => {
+                        shared.devices.retain(|known| known != device);
+                    }
+                    _ => {}
+                }
                 let (width, height) = shared.bounds;
                 if let Some(input) = input::collect(event, width, height) {
                     shared.inputs.push(input);
@@ -516,4 +599,64 @@ fn open_input(
         )
         .map_err(hardware("input events"))?;
     Ok(libinput)
+}
+
+/// Whether a frame is due: always in [`Redraw::Always`]; otherwise when `changed` (something
+/// may look different, or a window is moving) or when `idle`, the time since the last frame,
+/// has reached the backstop. Pure, so the rule that decides what the screen shows can be
+/// tested without a screen.
+fn frame_due(redraw: Redraw, changed: bool, idle: Duration) -> bool {
+    match redraw {
+        Redraw::Always => true,
+        Redraw::OnChange => changed || idle >= BACKSTOP,
+    }
+}
+
+/// Applies the device settings that `device` has. A setting the device lacks is skipped, and
+/// one libinput refuses leaves the device as it was: there is no better answer for a mouse
+/// that cannot tap, and nothing here can tell the user of a refusal.
+fn apply_device(device: &mut Device, settings: &InputSettings) {
+    if let Some(on) = settings.tap_to_click()
+        && device.config_tap_finger_count() > 0
+    {
+        let _ = device.config_tap_set_enabled(on);
+    }
+    if let Some(on) = settings.natural_scroll()
+        && device.config_scroll_has_natural_scroll()
+    {
+        let _ = device.config_scroll_set_natural_scroll_enabled(on);
+    }
+    if let Some(speed) = settings.pointer_speed()
+        && device.config_accel_is_available()
+    {
+        let _ = device.config_accel_set_speed(speed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn always_draws_whatever_the_signals_say(changed: bool, idle_ms in 0u64..10_000) {
+            prop_assert!(frame_due(Redraw::Always, changed, Duration::from_millis(idle_ms)));
+        }
+
+        #[test]
+        fn a_change_is_drawn_at_once(idle_ms in 0u64..10_000) {
+            prop_assert!(frame_due(Redraw::OnChange, true, Duration::from_millis(idle_ms)));
+        }
+
+        #[test]
+        fn nothing_waits_longer_than_the_backstop_for_a_frame(changed: bool) {
+            prop_assert!(frame_due(Redraw::OnChange, changed, BACKSTOP));
+        }
+
+        #[test]
+        fn a_quiet_screen_is_left_alone_before_the_backstop(idle_ms in 0u64..1000) {
+            prop_assert!(!frame_due(Redraw::OnChange, false, Duration::from_millis(idle_ms)));
+        }
+    }
 }

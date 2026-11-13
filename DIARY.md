@@ -1697,3 +1697,20 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-11 | Initial entry | deltaog-117 |
+
+---
+
+### 2026-11-13 – Input settings, drawing on change, and a swap interval that is not fatal
+
+- **Scope:** the lutece half of the window manager's roadmap items 1 to 3 for this cycle: a start-up failure found when the nested host was first run on Mesa 26, and the settings and the redraw rule of the hardware session.
+- **Swap interval:** `eglSwapInterval` answered `EGL_BAD_SURFACE` (`0x300d`) on the first frame on an AMD machine with Mesa 26.2, and `render` returned the error, so the host stopped at start-up. The call only protects against the covered-window stall, so a refusal is not an error now: `set_swap_interval` returns a bool, and the nested backend asks again each frame until it works. A driver that never accepts it loses that protection; whether it ever stalls there was not watched. The cause of the bad surface on the first frame is a guess (the surface not yet valid for the call), not something I checked.
+- **Decision (COA C):** `DrmBackend` draws a frame when its `frame_due` rule says so: always in `Redraw::Always`, and in `Redraw::OnChange` when something may have changed or a second has passed. The signals are a flag in the compositor state set by every client commit and cursor-image change, by `apply_scene` only when its diff is not empty (it runs on every turn of the host's loop), by `apply_effects` when it gets any, by input, by events, by an outline change and by the terminal coming back, and `Windows::animating` for a glide in progress. Rejected: only the flag (a forgotten source stays stale for ever), and smithay's damage tracker (every shader element would have to report its own damage, which cannot be checked without a screen).
+- **Settings:** `InputSettings` is the only way to hold a repeat delay (100 to 5000 ms), a rate (0 to 200) or a pointer speed (-1 to 1), so applying one never checks. The repeat constants moved from the compositor into the settings module, so the default is the old behaviour by construction. Device settings go through libinput on each `DeviceAdded` and again on a change; a feature a device lacks is skipped and a refusal is dropped.
+- **Tests:** property tests for the settings and for `frame_due`, and three integration tests with a real client for the repeat (now, after a change, on a later connection). Format, clippy with warnings denied and every test pass with the `drm` feature on and off.
+- **Not done:** the damage flag is not unit-tested (its state needs a display), and nothing was seen on a screen: the DRM session has still not run, so neither the redraw nor the libinput settings were exercised on hardware.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-13 | Initial entry | deltaog-117 |

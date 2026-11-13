@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `InputSettings` and `SettingsError`: key repeat delay and rate, tap to click, natural scroll and pointer speed, refused when out of range (delay 100 to 5000 ms, rate 0 to 200, speed -1 to 1). `WaylandBackend::set_repeat` and `NestedBackend::set_input_settings` tell clients the repeat; `DrmBackend::set_input_settings` also sets the libinput devices, now and as they are plugged in. The repeat defaults are the old constants (600 ms, 25 a second), and a device setting left as `None` leaves the device alone.
+- `Redraw` and `DrmBackend::set_redraw`: the machine's screen is drawn only when something may have changed, and at least once a second (`OnChange`, the default), or every refresh as before (`Always`).
 - Title text: the title bar shows the window's title. Drawn with `ab_glyph` (new dependency of `lutece-wayland`) from JetBrains Mono Regular, shipped in the crate under the SIL Open Font License. Sized and coloured from the bar, cut with an ellipsis, kept per title in a bounded cache. No new `Style` field.
 - `X11Backend::set_read_only` and `is_read_only`: hold the keyboard and the pointer back from the programs with active grabs on the root window, or give them back. New error `Error::InputAlreadyGrabbed` when another client holds either.
 - `DrmBackend` (feature `drm`): the compositor as a login's session on one real screen, with the seat, the GPU and input from libseat, DRM and libinput. `open`, `next_events`, `apply_scene`, `apply_effects`, `render`, `set_outlines`, `set_read_only`, `is_closed` and the rest of `NestedBackend`'s calls. Ctrl+Alt+Backspace ends it and Ctrl+Alt+F1 to F12 switch terminal. One screen only, no hotplug. Not run on a screen yet.
@@ -163,6 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland` gives each Xwayland instance a display number from a process-wide counter instead of Smithay's lowest free one (the first is still the lowest free); `x11rb` 0.14 moves from the dev-dependencies to the dependencies
 
 ### Fixed
+- The nested window no longer stops at start-up when the driver refuses `eglSwapInterval` on the first frame (`EGL_BAD_SURFACE` on Mesa 26.2): it asks again on later frames and the refusal is not an error.
 - The nested Wayland window no longer stalls the whole loop while the host covers it: the swap interval is set to zero, so the buffer swap does not wait for a frame callback the host never sends.
 - The nested Wayland window drew everything upside down (found the first time it was looked at, with a bar and three terminals in it): the winit framebuffer has its origin at the bottom, so the frame is now drawn with `Transform::Flipped180`.
 - `lutece-wayland`: `_NET_ACTIVE_WINDOW` under Xwayland named the root or the window that had just lost the focus; it now names the X11 window that has the keyboard focus, and none when a Wayland surface has it

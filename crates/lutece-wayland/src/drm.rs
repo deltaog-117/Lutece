@@ -15,4 +15,4 @@ mod session;
 
 pub use pattern::{PatternReport, show_test_pattern};
 pub use pick::{ModeInfo, best_mode, pattern_color, pick_crtc};
-pub use session::DrmBackend;
+pub use session::{DrmBackend, Redraw};

@@ -8,6 +8,7 @@ use crate::dmabuf::Dmabufs;
 use crate::focus::Focus;
 use crate::pointer::PointerState;
 use crate::scale::Scale;
+use crate::settings::InputSettings;
 use crate::translate;
 use crate::windows::Windows;
 use crate::xwayland::StateReader;
@@ -54,9 +55,6 @@ use smithay::{
 use std::collections::{HashMap, HashSet};
 
 const SEAT_NAME: &str = "lutece";
-/// Key repeat as most desktops default to it: wait 600 ms, then 25 keys per second.
-const REPEAT_RATE: i32 = 25;
-const REPEAT_DELAY: i32 = 600;
 
 /// Everything the protocol handlers read and change.
 pub(crate) struct State {
@@ -93,6 +91,9 @@ pub(crate) struct State {
     pub(crate) pointer: PointerState,
     /// Events for the core, waiting for the caller to collect them.
     pub(crate) events: Vec<Event>,
+    /// Set when a client's picture or the pointer's image may have changed since the caller
+    /// last drew; the caller clears it when it does.
+    pub(crate) damaged: bool,
     /// Key combinations the core wants for itself; clients never see them.
     pub(crate) grabs: HashSet<KeyPress>,
     /// Keys whose press was taken, so their release is taken too.
@@ -130,7 +131,8 @@ impl State {
     ) -> Result<Self, smithay::input::keyboard::Error> {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(display, SEAT_NAME);
-        seat.add_keyboard(Default::default(), REPEAT_DELAY, REPEAT_RATE)?;
+        let (rate, delay) = InputSettings::default().repeat_info();
+        seat.add_keyboard(Default::default(), delay, rate)?;
         seat.add_pointer();
         // Clients need the manager to bind `wl_output`; the output itself is made by the
         // backend, which owns its size.
@@ -164,6 +166,7 @@ impl State {
             popups: PopupManager::default(),
             pointer: PointerState::new(),
             events: Vec::new(),
+            damaged: true,
             grabs: HashSet::new(),
             suppressed: HashSet::new(),
             xwayland_shell: XWaylandShellState::new::<Self>(display),
@@ -329,6 +332,8 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        // Any commit may have a new picture, a new cursor image or a window that went away.
+        self.damaged = true;
         // Lets the renderer take hold of the buffer the client just attached.
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
@@ -428,6 +433,7 @@ impl SeatHandler for State {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.damaged = true;
         self.pointer.cursor = image;
     }
 }
