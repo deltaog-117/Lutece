@@ -31,6 +31,7 @@ mod dmabuf;
 mod drm;
 mod error;
 mod focus;
+mod glide;
 mod input;
 mod layers;
 mod look;

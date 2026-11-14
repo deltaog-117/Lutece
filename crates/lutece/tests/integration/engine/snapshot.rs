@@ -137,6 +137,29 @@ fn the_untouched_snapshot_restores() {
 }
 
 #[test]
+fn a_glide_set_survives_a_snapshot() {
+    let mut engine = busy();
+    let glide = lutece::Glide::MOVES
+        .with(lutece::Glide::OPACITY)
+        .with(lutece::Glide::APPEARS);
+    engine.handle(Event::StyleChanged {
+        id: WinId::new(11),
+        style: lutece::Style::default().with_glide(glide).with_radius(3),
+    });
+
+    let snapshot = engine.snapshot();
+    let stored = snapshot
+        .styles
+        .iter()
+        .find(|entry| entry.window == 11)
+        .expect("window 11 has a style");
+    assert_eq!(stored.style.glide, glide.bits());
+
+    let restored = Engine::restore(&template(), &snapshot).expect("restores");
+    assert_eq!(restored, engine);
+}
+
+#[test]
 fn another_version_is_refused() {
     refused(|snapshot| snapshot.version = VERSION + 1);
 }

@@ -8,9 +8,15 @@
 //! `libinput`, so it must be started from a virtual terminal, not from inside another
 //! session.
 //!
-//! What is not done: a monitor plugged or unplugged while it runs (the screens are read once,
-//! when the session opens), a screen turned or placed anywhere but in a row, and a scale for
-//! the X11 programs of Xwayland, which draw at one.
+//! A monitor plugged or unplugged while it runs is noticed: the device reports a change, and
+//! once it has been quiet for a moment the connected screens are read again (see
+//! [`DrmBackend::next_events`]). A screen that stays keeps its output number, one that is gone
+//! is a missing output the core moves its windows off, and one that returns gets its old
+//! number back, so it shows the workspace it showed.
+//!
+//! What is not done: a screen turned or placed anywhere but in a row, a change of a screen's
+//! mode while it stays connected, and a sharp picture for the X11 programs of Xwayland, which
+//! live in logical pixels and are stretched to the screen (see the X11 tests).
 //!
 //! A frame is drawn only when something may have changed (see [`Redraw`]), and at least once a
 //! second whatever the signals say, so a change nobody reported shows up late and is never
@@ -22,10 +28,10 @@
 //! Started by hand, it has never been run on a screen; see `docs/live-check.md` in the window
 //! manager for what to look at first.
 
-use super::arrange::{ScreenSettings, arrange, order};
+use super::arrange::{ScreenSettings, arrange, order, plan_screens, remember};
 use super::cursor;
 use super::keys::{Chord, Chords, Verdict};
-use super::pattern::{COLOR_FORMATS, Target, find_targets, hardware, make_renderer};
+use super::pattern::{COLOR_FORMATS, Target, find_targets, hardware, make_renderer, read_targets};
 use crate::apply::Flow;
 use crate::backend::WaylandBackend;
 use crate::dmabuf::DmabufSupport;
@@ -38,6 +44,7 @@ use crate::scale::Scale;
 use crate::settings::InputSettings;
 use crate::title::TitleCache;
 use lutece::{Effect, Event, KeyPress, Modifiers, Output, OutputId, Rect, Scene};
+use smithay::backend::allocator::Format as DrmFormat;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
 use smithay::backend::input::{InputEvent, KeyState};
@@ -51,7 +58,7 @@ use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Bind, Color32F, Frame, ImportDma, Renderer};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
-use smithay::backend::udev::primary_gpu;
+use smithay::backend::udev::{UdevBackend, UdevEvent, primary_gpu};
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::drm::control::crtc;
@@ -68,6 +75,10 @@ const WAIT_SLICE: Duration = Duration::from_millis(8);
 /// The longest the screen goes without a new frame in [`Redraw::OnChange`]. It bounds how long
 /// a change that nothing reported stays unseen.
 const BACKSTOP: Duration = Duration::from_secs(1);
+/// How long the device is left quiet after it reports a change before the screens are read
+/// again. Plugging a monitor sends several reports in a row, and its modes are not all ready
+/// at the first.
+const RESCAN_DELAY: Duration = Duration::from_millis(300);
 
 /// When the screen is drawn again.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -98,12 +109,19 @@ struct Shared {
     settings: InputSettings,
     /// The devices the seat has now, to set again when the settings change.
     devices: Vec<Device>,
+    /// When to read the connected screens again, after the device reported a change.
+    rescan_at: Option<Instant>,
 }
 
 /// One connected screen: the surface its pictures go to and what it shows of the space.
 struct Head {
     /// The connector, for example `HDMIA-1`.
     name: String,
+    /// The number of its output, which it keeps for as long as it is connected and gets
+    /// back when it returns.
+    id: OutputId,
+    /// What was opened, for the line that says so.
+    line: String,
     crtc: crtc::Handle,
     surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
     /// The picture's size in pixels.
@@ -144,6 +162,14 @@ pub struct DrmBackend {
     renderer: GlesRenderer,
     /// Every connected screen, in the order they are laid out. Never empty.
     heads: Vec<Head>,
+    /// What the user said about the order and the scale of the screens, kept to apply to
+    /// screens that come and go.
+    settings: ScreenSettings,
+    /// The output number of every screen seen so far, so one that returns gets its own back.
+    known: Vec<(String, OutputId)>,
+    /// What screens are made on, kept for the ones that are plugged in later.
+    gbm: GbmDevice<DrmDeviceFd>,
+    formats: Vec<DrmFormat>,
     /// The same screens as the pointer sees them.
     areas: Vec<Area>,
     device: DrmDevice,
@@ -227,6 +253,19 @@ impl DrmBackend {
             )
             .map_err(hardware("graphics events"))?;
 
+        let device_id = device.device_id();
+        let udev = UdevBackend::new(session.seat()).map_err(hardware("device watch"))?;
+        handle
+            .insert_source(udev, move |event, (), shared: &mut Shared| {
+                // A monitor plugged or unplugged is a change of the graphics device itself.
+                if let UdevEvent::Changed { device_id: changed } = event
+                    && changed == device_id
+                {
+                    shared.rescan_at = Some(Instant::now() + RESCAN_DELAY);
+                }
+            })
+            .map_err(hardware("device events"))?;
+
         let mut targets = find_targets(&device)?;
         let sequence = {
             let names: Vec<&str> = targets.iter().map(|target| target.name.as_str()).collect();
@@ -257,37 +296,16 @@ impl DrmBackend {
             .copied()
             .collect::<Vec<_>>();
         let mut heads = Vec::with_capacity(targets.len());
-        let mut described = Vec::with_capacity(targets.len());
-        for ((target, scale), rect) in targets.into_iter().zip(scales).zip(layout) {
-            let drm_surface = device
-                .create_surface(target.crtc, target.mode, &[target.connector])
-                .map_err(hardware("screen surface"))?;
-            let allocator = GbmAllocator::new(
-                gbm.clone(),
-                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
-            );
-            let surface =
-                GbmBufferedSurface::new(drm_surface, allocator, &COLOR_FORMATS, formats.clone())
-                    .map_err(hardware("screen buffers"))?;
-            let [width, height] = target.size;
-            let mut line = format!(
-                "{} at {width}x{height} {} Hz",
-                target.name, target.refresh_hz
-            );
-            if scale != Scale::ONE {
-                line.push_str(&format!(" scale {}", scale.factor()));
-            }
-            described.push(line);
-            heads.push(Head {
-                name: target.name,
-                crtc: target.crtc,
-                surface,
-                size: smithay::utils::Size::from((i32::from(width), i32::from(height))),
-                scale,
-                rect,
-                flip_pending: false,
-                stale: true,
-            });
+        for (((target, scale), rect), number) in
+            targets.into_iter().zip(scales).zip(layout).zip(0u32..)
+        {
+            heads.push(open_head(
+                &mut device,
+                &gbm,
+                &formats,
+                target,
+                (OutputId::new(number), scale, rect),
+            )?);
         }
         // A name the user gave that no connected screen has: said, not an error, so one
         // configuration serves a laptop on and off its dock.
@@ -295,7 +313,7 @@ impl DrmBackend {
             .names()
             .filter(|name| heads.iter().all(|head| head.name != *name))
             .collect();
-        let mut description = described.join(", ");
+        let mut description = describe_heads(&heads);
         if !missing.is_empty() {
             description.push_str(&format!(
                 "; no connected screen is named {}",
@@ -305,39 +323,12 @@ impl DrmBackend {
 
         let libinput = open_input(&session, &handle)?;
 
-        let areas: Vec<Area> = heads
-            .iter()
-            .map(|head| {
-                (
-                    f64::from(head.rect.x()),
-                    f64::from(head.rect.y()),
-                    f64::from(head.rect.width()),
-                    f64::from(head.rect.height()),
-                )
-            })
-            .collect();
-        let outputs: Vec<Output> = (0u32..)
-            .zip(&heads)
-            .map(|(id, head)| Output {
-                id: OutputId::new(id),
-                rect: head.rect,
-            })
-            .collect();
-        let bounds = (
-            outputs
-                .iter()
-                .map(|output| far_edge(output.rect.x(), output.rect.width()))
-                .max(),
-            outputs
-                .iter()
-                .map(|output| far_edge(output.rect.y(), output.rect.height()))
-                .max(),
-        );
+        let (outputs, areas, bounds) = geometry(&heads);
 
         // `bind` makes the one output the compositor starts with; the real set replaces it.
         let mut wayland = WaylandBackend::bind(heads[0].rect.size())?;
-        for (id, head) in (0u32..).zip(&heads) {
-            wayland.set_output_scale(OutputId::new(id), Some(head.scale));
+        for head in &heads {
+            wayland.set_output_scale(head.id, Some(head.scale));
         }
         wayland.set_outputs(&outputs);
         let shaders = Shaders::compile(&mut renderer).map_err(hardware("shaders"))?;
@@ -351,7 +342,14 @@ impl DrmBackend {
             titles: TitleCache::new(),
             pointer: cursor::sprite(),
             renderer,
+            known: heads
+                .iter()
+                .map(|head| (head.name.clone(), head.id))
+                .collect(),
             heads,
+            settings: settings.clone(),
+            gbm,
+            formats,
             areas,
             device,
             libinput,
@@ -361,9 +359,10 @@ impl DrmBackend {
                 session: Vec::new(),
                 flips: Vec::new(),
                 failure: None,
-                bounds: (bounds.0.unwrap_or(0), bounds.1.unwrap_or(0)),
+                bounds,
                 settings: InputSettings::default(),
                 devices: Vec::new(),
+                rescan_at: None,
             },
             session,
             started: Instant::now(),
@@ -478,6 +477,7 @@ impl DrmBackend {
         }
         self.follow_session()?;
         self.follow_flips()?;
+        self.follow_screens()?;
 
         let mut events = Vec::new();
         for input in std::mem::take(&mut self.shared.inputs) {
@@ -702,10 +702,136 @@ impl DrmBackend {
                         head.stale = true;
                     }
                     self.active = true;
+                    // A monitor may have come or gone while this terminal was not the one on
+                    // the screen, with nobody here to hear the device say so.
+                    self.shared.rescan_at = Some(Instant::now());
                     self.wayland.mark_damage();
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Reads the screens again once the device has been quiet for a moment after reporting a
+    /// change. Waits while this terminal is not the one on the screen.
+    fn follow_screens(&mut self) -> Result<()> {
+        let Some(at) = self.shared.rescan_at else {
+            return Ok(());
+        };
+        if !self.active || Instant::now() < at {
+            return Ok(());
+        }
+        self.shared.rescan_at = None;
+        self.rescan()
+    }
+
+    /// Brings the screens shown in line with the screens connected: closes the ones that are
+    /// gone, opens the ones that appeared, lays all of them out again and tells the core and
+    /// the clients.
+    ///
+    /// A problem in reading the screens, or in a screen that cannot be opened, is said on the
+    /// standard error and the session goes on with what it has: a monitor that does not work
+    /// must not end the session. Only the end of every screen is an error, since there would
+    /// be nothing left to show.
+    fn rescan(&mut self) -> Result<()> {
+        let pinned: Vec<(String, crtc::Handle)> = self
+            .heads
+            .iter()
+            .map(|head| (head.name.clone(), head.crtc))
+            .collect();
+        let mut targets = match read_targets(&self.device, &pinned) {
+            Ok(targets) => targets,
+            Err(error) => {
+                eprintln!("lutece: the screens could not be read again: {error}");
+                return Ok(());
+            }
+        };
+        if targets.is_empty() {
+            // Every monitor gone at once, a laptop with its lid shut among them: the picture
+            // stays on the last screens, which is more useful than no output at all.
+            eprintln!("lutece: no screen is connected, the ones shown stay");
+            return Ok(());
+        }
+        let shown: Vec<String> = self.heads.iter().map(|head| head.name.clone()).collect();
+        let found: Vec<String> = targets.iter().map(|target| target.name.clone()).collect();
+        let plan = plan_screens(&self.known, &shown, &found, &self.settings);
+        if plan.is_unchanged(&shown) {
+            return Ok(());
+        }
+
+        // Closed first, so their scanout engines are free for the screens that open.
+        let gone: Vec<OutputId> = self
+            .heads
+            .iter()
+            .filter(|head| plan.closed.contains(&head.name))
+            .map(|head| head.id)
+            .collect();
+        let mut kept = std::mem::take(&mut self.heads);
+        kept.retain(|head| !plan.closed.contains(&head.name));
+
+        let mut heads = Vec::with_capacity(plan.layout.len());
+        for (name, id) in &plan.layout {
+            if let Some(position) = kept.iter().position(|head| head.name == *name) {
+                let mut head = kept.swap_remove(position);
+                head.id = *id;
+                head.stale = true;
+                heads.push(head);
+                continue;
+            }
+            let Some(position) = targets.iter().position(|target| target.name == *name) else {
+                continue;
+            };
+            let target = targets.swap_remove(position);
+            let scale = self.settings.scale_of(name).unwrap_or_default();
+            // The rectangle is a stand-in: the whole row is laid out again below.
+            let rect = Rect::new(0, 0, 1, 1)?;
+            match open_head(
+                &mut self.device,
+                &self.gbm,
+                &self.formats,
+                target,
+                (*id, scale, rect),
+            ) {
+                Ok(head) => heads.push(head),
+                Err(error) => eprintln!("lutece: the screen {name} could not be opened: {error}"),
+            }
+        }
+        if heads.is_empty() {
+            return Err(Error::Drm(
+                "no screen could be opened after the screens changed".to_owned(),
+            ));
+        }
+
+        let row: Vec<([u16; 2], Scale)> = heads
+            .iter()
+            .map(|head| {
+                let side = |pixels: i32| u16::try_from(pixels).unwrap_or(u16::MAX);
+                ([side(head.size.w), side(head.size.h)], head.scale)
+            })
+            .collect();
+        for (head, rect) in heads.iter_mut().zip(arrange(&row)?) {
+            head.rect = rect;
+        }
+        let layout: Vec<(String, OutputId)> = heads
+            .iter()
+            .map(|head| (head.name.clone(), head.id))
+            .collect();
+        self.known = remember(&self.known, &layout);
+        self.heads = heads;
+
+        let (outputs, areas, bounds) = geometry(&self.heads);
+        for id in gone {
+            self.wayland.set_output_scale(id, None);
+        }
+        for head in &self.heads {
+            self.wayland.set_output_scale(head.id, Some(head.scale));
+        }
+        self.wayland.set_outputs(&outputs);
+        self.areas = areas;
+        self.shared.bounds = bounds;
+        self.description = describe_heads(&self.heads);
+        self.wayland.mark_damage();
+        eprintln!("lutece: the screens are now {}", self.description);
         Ok(())
     }
 
@@ -727,6 +853,84 @@ impl DrmBackend {
         }
         Ok(())
     }
+}
+
+/// Puts a picture on the screen `target` names: its surface and buffers, at `scale`, showing
+/// `rect` of the space as output `id`.
+fn open_head(
+    device: &mut DrmDevice,
+    gbm: &GbmDevice<DrmDeviceFd>,
+    formats: &[DrmFormat],
+    target: Target,
+    (id, scale, rect): (OutputId, Scale, Rect),
+) -> Result<Head> {
+    let drm_surface = device
+        .create_surface(target.crtc, target.mode, &[target.connector])
+        .map_err(hardware("screen surface"))?;
+    let allocator = GbmAllocator::new(
+        gbm.clone(),
+        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+    );
+    let surface = GbmBufferedSurface::new(drm_surface, allocator, &COLOR_FORMATS, formats.to_vec())
+        .map_err(hardware("screen buffers"))?;
+    let [width, height] = target.size;
+    let mut line = format!(
+        "{} at {width}x{height} {} Hz",
+        target.name, target.refresh_hz
+    );
+    if scale != Scale::ONE {
+        line.push_str(&format!(" scale {}", scale.factor()));
+    }
+    Ok(Head {
+        name: target.name,
+        id,
+        line,
+        crtc: target.crtc,
+        surface,
+        size: smithay::utils::Size::from((i32::from(width), i32::from(height))),
+        scale,
+        rect,
+        flip_pending: false,
+        stale: true,
+    })
+}
+
+/// The screens as the one line [`DrmBackend::describe`] gives.
+fn describe_heads(heads: &[Head]) -> String {
+    heads
+        .iter()
+        .map(|head| head.line.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What the screens look like to the core (its outputs), to the pointer (its areas) and to
+/// an absolute pointer device (the far corner of the box around all of them).
+fn geometry(heads: &[Head]) -> (Vec<Output>, Vec<Area>, (i32, i32)) {
+    let outputs: Vec<Output> = heads
+        .iter()
+        .map(|head| Output {
+            id: head.id,
+            rect: head.rect,
+        })
+        .collect();
+    let areas = heads
+        .iter()
+        .map(|head| {
+            (
+                f64::from(head.rect.x()),
+                f64::from(head.rect.y()),
+                f64::from(head.rect.width()),
+                f64::from(head.rect.height()),
+            )
+        })
+        .collect();
+    let edge = |far: fn(&Output) -> i32| outputs.iter().map(far).max().unwrap_or(0);
+    let bounds = (
+        edge(|output| far_edge(output.rect.x(), output.rect.width())),
+        edge(|output| far_edge(output.rect.y(), output.rect.height())),
+    );
+    (outputs, areas, bounds)
 }
 
 /// Opens the keyboard, pointer and other devices of the seat and has the loop read them.

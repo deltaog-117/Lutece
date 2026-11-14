@@ -1731,3 +1731,22 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-13 | Initial entry | deltaog-117 |
+
+---
+
+### 2026-11-14 – Glide for the look, screens that come and go, and the X11 scale as found
+
+- **Scope:** the lutece half of the window manager's items 4, 5 and 6 (see its diary for the choices and the reasons). Item 5 was chosen as the compositor stretching X11 programs, item 6 as declared transitions, and item 4 had one approach.
+- **`Glide`:** a set of four kinds on `Style`, defaulting to moves only so a style that says nothing is what it was. It is in the snapshot as one byte with a serde default, so old checkpoint files read as before; no version bump. It is applied in the backend's `glide` module, a pure function of the old and new style, the transition and the time, tested for every curve with a property (what is drawn stays between the old and the new value and arrives at the end). A value the set leaves out starts at its new value, so it jumps while the others glide. `Entry` keeps the glide, and the layer builder draws the style at `now`, so the renderer did not change.
+- **When a glide starts:** a style change on a window that is on screen starts from what is drawn now; a style change on a hidden window does not (it has nothing to glide from); a show starts the appear fade. The core orders style changes before shows, so a new window already has its style when it appears.
+- **Hotplug, the shape:** `Head` has its output number and its description line. A pure `plan_screens` works out which screens close and open and which number each has, and a bounded table keeps the numbers of screens that are away, so a monitor that returns shows the workspace it showed (the core already hides the windows of a missing output and shows them again). `read_targets` reads the connectors with the engines of screens that stay pinned, so a screen that stays is never moved to another scanout engine, and may come back empty. The udev callback only sets a deadline; the rescan runs from `next_events` when the device has been quiet for 300 ms and this terminal is the one on the screen.
+- **What can go wrong, and what was chosen:** a screen that cannot be opened is said and skipped; every screen gone at once leaves the old ones in place; a read that fails is said and the session goes on. Only the end of every screen after opening is an error, since there would be nothing to show. A rescan that changes nothing is a no-op, so the change reports that our own mode setting may cause are harmless.
+- **X11 and the scale:** measured with a temporary line in the commit handler (removed): at scales 1 and 2 the window's surface is committed at buffer scale 1 with a buffer the size of the X window, and the X screen is the logical output at every scale. So Xwayland already shows X11 programs the way the compositor-stretch option would; only a test was added.
+- **Tests:** the glide's properties, the plan's properties (exactly the connected screens are laid out, numbers unique, a screen that stays keeps its number, closed and opened are exactly the difference, the table is bounded), a snapshot test for the glide set, and the X11 scale test. Format, clippy with warnings denied and every test pass; one X11 timing test failed once under load and passed alone and in the whole run after.
+- **Not done:** nothing was seen on a screen. The udev wiring, `read_targets` with pinned engines, `open_head` and `rescan` need a seat and a monitor, so they are checked by compiling and by the pure parts; the window manager's `docs/live-check.md` section 14 says what to look at.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-14 | Initial entry | deltaog-117 |

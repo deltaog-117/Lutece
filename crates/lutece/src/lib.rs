@@ -24,7 +24,9 @@ pub use shared::contracts::event::{
 pub use shared::contracts::kernel::Kernel;
 pub use shared::contracts::scene::{Placement, Scene};
 pub use shared::contracts::scene_diff::{Change, diff};
-pub use shared::contracts::style::{Border, Curve, Rgba, Shadow, Style, TitleBar, Transition};
+pub use shared::contracts::style::{
+    Border, Curve, Glide, Rgba, Shadow, Style, TitleBar, Transition,
+};
 pub use shared::error::{Error, Result};
 pub use shared::geometry::{Insets, Point, Rect, Size};
 pub use shared::ids::{OutputId, Tag, WinId};

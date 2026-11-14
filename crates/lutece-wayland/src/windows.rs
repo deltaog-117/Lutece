@@ -11,6 +11,7 @@
 //! program put them.
 
 use crate::animation::Animation;
+use crate::glide::{StyleGlide, drawn_style};
 use lutece::{Rect, Style, WinId, WindowInfo};
 use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -59,6 +60,8 @@ pub(crate) struct Entry {
     pub(crate) style: Style,
     /// The window on its way to `rect`, while it moves with a transition.
     pub(crate) animation: Option<Animation>,
+    /// Its opacity and radius on their way to the values of `style`, while they glide.
+    pub(crate) style_glide: Option<StyleGlide>,
 }
 
 impl Entry {
@@ -70,6 +73,12 @@ impl Entry {
             Some(animation) if !animation.finished(now) => animation.rect_at(now),
             _ => target,
         })
+    }
+
+    /// The style to draw at `now`: the style the core gave, with the opacity and radius a
+    /// glide has reached.
+    pub(crate) fn drawn_style(&self, now: Instant) -> Style {
+        drawn_style(&self.style, self.style_glide.as_ref(), now)
     }
 }
 
@@ -156,9 +165,11 @@ impl Windows {
     #[cfg(feature = "drm")]
     pub(crate) fn animating(&self, now: Instant) -> bool {
         self.managed.values().any(|entry| {
-            entry
+            let moving = entry
                 .animation
-                .is_some_and(|animation| !animation.finished(now))
+                .is_some_and(|animation| !animation.finished(now));
+            let gliding = entry.style_glide.is_some_and(|glide| !glide.finished(now));
+            moving || gliding
         })
     }
 
@@ -190,6 +201,7 @@ impl Windows {
                 fullscreen: false,
                 style: Style::default(),
                 animation: None,
+                style_glide: None,
             },
         );
         id
@@ -438,6 +450,7 @@ fn window_layers(id: WinId, entry: &Entry, target: Rect, title: &str, now: Insta
     // While the window moves it is drawn between its old and new rectangles; its client has
     // already been told the new size and is drawn scaled to fit.
     let rect = entry.drawn_rect(now).unwrap_or(target);
+    let style = entry.drawn_style(now);
     let origin = Point::from((rect.x(), rect.y()));
     // The rectangle is for the window proper; a client that draws a shadow or a title bar
     // around it declares where the window starts inside its surface. An X11 window is
@@ -462,10 +475,10 @@ fn window_layers(id: WinId, entry: &Entry, target: Rect, title: &str, now: Insta
         origin: surface_origin,
         popup: false,
         look: Some(Look {
-            style: entry.style,
+            style,
             target: placed_area(target),
             drawn: placed_area(rect),
-            title: if entry.style.title_bar().height > 0 {
+            title: if style.title_bar().height > 0 {
                 title.to_owned()
             } else {
                 String::new()

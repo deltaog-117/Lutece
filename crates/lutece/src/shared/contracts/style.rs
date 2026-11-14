@@ -98,6 +98,74 @@ pub struct Transition {
     pub duration_ms: u16,
 }
 
+/// Which of a window's changes glide with the window's [`Transition`] instead of jumping.
+///
+/// A set of independent kinds. The default is [`Glide::MOVES`] alone, which is what a window
+/// did before this type existed: it glides to a new rectangle and everything else jumps. A
+/// duration of 0 turns every kind off, whatever the set holds.
+///
+/// # Examples
+///
+/// ```
+/// use lutece::Glide;
+///
+/// let glide = Glide::MOVES.with(Glide::OPACITY);
+/// assert!(glide.contains(Glide::OPACITY));
+/// assert!(!glide.contains(Glide::RADIUS));
+/// assert_eq!(Glide::default(), Glide::MOVES);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Glide(u8);
+
+impl Glide {
+    /// Nothing glides.
+    pub const NONE: Self = Self(0);
+    /// A move or resize to another rectangle glides.
+    pub const MOVES: Self = Self(1);
+    /// A change of opacity glides.
+    pub const OPACITY: Self = Self(1 << 1);
+    /// A change of corner radius glides.
+    pub const RADIUS: Self = Self(1 << 2);
+    /// A window that appears (opens, or comes back with its workspace) fades in from
+    /// invisible to its opacity.
+    pub const APPEARS: Self = Self(1 << 3);
+
+    /// Every kind this version knows.
+    const KNOWN: u8 = 0b1111;
+
+    /// This set with the kinds of `other` added.
+    #[must_use]
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Whether every kind of `other` is in this set.
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// The set as a number, one bit per kind, for a file or a message.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The set from a number written by [`bits`](Self::bits). A bit this version does not
+    /// know is dropped, so a file from a newer version still reads.
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits & Self::KNOWN)
+    }
+}
+
+impl Default for Glide {
+    fn default() -> Self {
+        Self::MOVES
+    }
+}
+
 /// The look of one window.
 ///
 /// The default is a plain, fully opaque window with no border and no animation, which is
@@ -124,6 +192,7 @@ pub struct Style {
     border: Border,
     opacity: u8,
     transition: Transition,
+    glide: Glide,
     title_bar: TitleBar,
     shadow: Shadow,
 }
@@ -136,6 +205,7 @@ impl Default for Style {
             // Opaque, not zero: a window with no style must stay visible.
             opacity: u8::MAX,
             transition: Transition::default(),
+            glide: Glide::default(),
             title_bar: TitleBar::default(),
             shadow: Shadow::default(),
         }
@@ -168,6 +238,13 @@ impl Style {
     #[must_use]
     pub const fn with_transition(mut self, transition: Transition) -> Self {
         self.transition = transition;
+        self
+    }
+
+    /// Sets which changes of this window glide with its transition.
+    #[must_use]
+    pub const fn with_glide(mut self, glide: Glide) -> Self {
+        self.glide = glide;
         self
     }
 
@@ -225,6 +302,12 @@ impl Style {
     pub const fn transition(&self) -> Transition {
         self.transition
     }
+
+    /// Which changes glide with the animation.
+    #[must_use]
+    pub const fn glide(&self) -> Glide {
+        self.glide
+    }
 }
 
 #[cfg(test)]
@@ -238,8 +321,29 @@ mod tests {
         assert_eq!(style.radius(), 0);
         assert_eq!(style.border(), Border::default());
         assert_eq!(style.transition().duration_ms, 0);
+        assert_eq!(style.glide(), Glide::MOVES);
         assert_eq!(style.title_bar(), TitleBar::default());
         assert_eq!(style.shadow(), Shadow::default());
+    }
+
+    #[test]
+    fn a_glide_set_holds_what_was_put_in_and_nothing_else() {
+        let set = Glide::NONE.with(Glide::OPACITY).with(Glide::APPEARS);
+        assert!(set.contains(Glide::OPACITY) && set.contains(Glide::APPEARS));
+        assert!(!set.contains(Glide::MOVES) && !set.contains(Glide::RADIUS));
+        assert!(set.contains(Glide::NONE));
+        assert_eq!(Glide::NONE.bits(), 0);
+    }
+
+    #[test]
+    fn bits_a_newer_version_wrote_are_dropped_on_reading() {
+        let all = Glide::MOVES
+            .with(Glide::OPACITY)
+            .with(Glide::RADIUS)
+            .with(Glide::APPEARS);
+        assert_eq!(Glide::from_bits(all.bits()), all);
+        assert_eq!(Glide::from_bits(0b1111_0000), Glide::NONE);
+        assert_eq!(Glide::from_bits(0b1111_0010), Glide::OPACITY);
     }
 
     #[test]

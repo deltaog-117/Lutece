@@ -12,7 +12,7 @@ use smithay::backend::session::Session;
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::udev::primary_gpu;
 use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::drm::control::{Device as ControlDevice, ModeTypeFlags, connector};
+use smithay::reexports::drm::control::{Device as ControlDevice, ModeTypeFlags, connector, crtc};
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::utils::{DeviceFd, Physical, Rectangle, Size, Transform};
 use std::fmt::Display;
@@ -212,10 +212,34 @@ pub(super) fn find_target(device: &DrmDevice) -> Result<Target> {
 /// the order the device lists them. Each gets its own engine: the ones already given out are
 /// passed on, so two screens are never put on one.
 pub(super) fn find_targets(device: &DrmDevice) -> Result<Vec<Target>> {
+    let found = read_targets(device, &[])?;
+    if found.is_empty() {
+        return Err(Error::Drm(
+            "no connected screen with a mode and a free scanout engine".to_owned(),
+        ));
+    }
+    Ok(found)
+}
+
+/// Like [`find_targets`], for a session that is already running screens: a connector named in
+/// `pinned` keeps the engine it has, so a screen that stays is never moved, and the others
+/// are given engines that no pinned screen uses. May be empty, since every screen can be
+/// unplugged.
+pub(super) fn read_targets(
+    device: &DrmDevice,
+    pinned: &[(String, crtc::Handle)],
+) -> Result<Vec<Target>> {
     let resources = device
         .resource_handles()
         .map_err(hardware("reading the screens"))?;
     let mut taken = 0u32;
+    for (_, engine) in pinned {
+        if let Some(position) = resources.crtcs().iter().position(|crtc| crtc == engine)
+            && position < 32
+        {
+            taken |= 1 << position;
+        }
+    }
     let mut found = Vec::new();
     for &handle in resources.connectors() {
         let info = device
@@ -237,37 +261,39 @@ pub(super) fn find_targets(device: &DrmDevice) -> Result<Vec<Target>> {
         let Some(index) = best_mode(&listed) else {
             continue;
         };
-        let mut possible = 0u32;
-        for encoder in info.encoders() {
-            let encoder = device
-                .get_encoder(*encoder)
-                .map_err(hardware("reading an encoder"))?;
-            let usable = resources.filter_crtcs(encoder.possible_crtcs());
-            for (position, crtc) in resources.crtcs().iter().enumerate().take(32) {
-                if usable.contains(crtc) {
-                    possible |= 1 << position;
+        let name = format!("{:?}-{}", info.interface(), info.interface_id());
+        let engine = match pinned.iter().find(|(known, _)| *known == name) {
+            Some((_, engine)) => *engine,
+            None => {
+                let mut possible = 0u32;
+                for encoder in info.encoders() {
+                    let encoder = device
+                        .get_encoder(*encoder)
+                        .map_err(hardware("reading an encoder"))?;
+                    let usable = resources.filter_crtcs(encoder.possible_crtcs());
+                    for (position, crtc) in resources.crtcs().iter().enumerate().take(32) {
+                        if usable.contains(crtc) {
+                            possible |= 1 << position;
+                        }
+                    }
                 }
+                let Some(position) = pick_crtc(possible, taken, resources.crtcs().len()) else {
+                    continue;
+                };
+                // `pick_crtc` answers below 32, so the shift fits.
+                taken |= 1 << position;
+                resources.crtcs()[position]
             }
-        }
-        let Some(position) = pick_crtc(possible, taken, resources.crtcs().len()) else {
-            continue;
         };
-        // `pick_crtc` answers below 32, so the shift fits.
-        taken |= 1 << position;
         let mode = info.modes()[index];
         found.push(Target {
-            name: format!("{:?}-{}", info.interface(), info.interface_id()),
+            name,
             connector: handle,
-            crtc: resources.crtcs()[position],
+            crtc: engine,
             mode,
             size: [listed[index].width, listed[index].height],
             refresh_hz: listed[index].refresh_hz,
         });
-    }
-    if found.is_empty() {
-        return Err(Error::Drm(
-            "no connected screen with a mode and a free scanout engine".to_owned(),
-        ));
     }
     Ok(found)
 }

@@ -6,7 +6,7 @@
 
 use crate::support::{TestClient, backend, engine};
 use lutece::{Engine, Event, Insets, OutputId, WinId};
-use lutece_wayland::WaylandBackend;
+use lutece_wayland::{Scale, WaylandBackend};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -58,10 +58,19 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Option<Self> {
+        Self::start_at(None)
+    }
+
+    /// Like `start`, with the host scale set before Xwayland starts, as a session on a
+    /// scaled screen has it.
+    fn start_at(scale: Option<Scale>) -> Option<Self> {
         if !available() {
             return None;
         }
         let mut backend = backend();
+        if let Some(scale) = scale {
+            backend.set_scale(scale);
+        }
         backend.enable_xwayland().expect("Xwayland starts");
         let mut waiting = Vec::new();
         let deadline = Instant::now() + WAIT;
@@ -894,4 +903,40 @@ fn a_wayland_client_can_paste_what_an_x11_program_copied() {
         receiver.try_recv().ok()
     });
     assert_eq!(pasted, "from an x11 program");
+}
+
+/// An X11 program lives in logical pixels whatever the host scale: the X screen and the
+/// window the core places are the size of the logical output, and Xwayland shows them at a
+/// buffer scale of one, so the compositor stretches the picture to the screen. That is
+/// the design for X11 programs (sized right, drawn soft at a scale above one); a program
+/// that must be sharp needs a native scale, which Xwayland does not offer by default.
+///
+/// Measured by hand at scales 1, 1.5 and 2 as well: the window's surface was committed at
+/// buffer scale 1 with a buffer the size of the X window, at every one.
+#[test]
+fn an_x11_program_sees_logical_pixels_at_any_scale() {
+    for factor in [1.0, 1.5, 2.0] {
+        let scale = Scale::from_factor(factor).expect("a usable scale");
+        let Some(mut fixture) = Fixture::start_at(Some(scale)) else {
+            return;
+        };
+        let window = fixture.open((10, 10), (50, 50), "scaled", "Scaled", false);
+        fixture.wait_for_events("the X11 window to be reported", |events| {
+            !opened(events).is_empty()
+        });
+        fixture.drive();
+
+        let at = fixture.wait_for("the window to be placed", |fixture| {
+            fixture
+                .position(window)
+                .filter(|at| *at == (0, 0, 1000, 600))
+        });
+        assert_eq!(at, (0, 0, 1000, 600), "at a scale of {factor}");
+        let screen = &fixture.x.setup().roots[0];
+        assert_eq!(
+            (screen.width_in_pixels, screen.height_in_pixels),
+            (1000, 600),
+            "the X screen at a scale of {factor}"
+        );
+    }
 }

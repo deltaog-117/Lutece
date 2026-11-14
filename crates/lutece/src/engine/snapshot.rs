@@ -3,7 +3,7 @@
 use super::Engine;
 use super::external::{self, Slot, Slots};
 use crate::shared::contracts::event::{Output, PropertyTarget, WindowInfo};
-use crate::shared::contracts::style::{Curve, Rgba, Style, Transition};
+use crate::shared::contracts::style::{Curve, Glide, Rgba, Style, Transition};
 use crate::shared::error::{Error, Result};
 use crate::shared::geometry::Insets;
 use crate::shared::ids::{OutputId, Tag, WinId};
@@ -47,6 +47,7 @@ fn style_state(style: &Style) -> StyleState {
             Curve::EaseInOut => CurveState::EaseInOut,
         },
         duration_ms: style.transition().duration_ms,
+        glide: style.glide().bits(),
         title_bar_height: bar.height,
         title_bar_color: color_state(bar.color),
         shadow_blur: shadow.blur,
@@ -78,6 +79,7 @@ fn style_from(state: &StyleState) -> Style {
             curve,
             duration_ms: state.duration_ms,
         })
+        .with_glide(Glide::from_bits(state.glide))
 }
 
 impl Engine {

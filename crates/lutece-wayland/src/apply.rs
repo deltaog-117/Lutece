@@ -7,6 +7,7 @@
 use crate::animation::Animation;
 use crate::compositor::{State, set_activated};
 use crate::error::{Error, Result};
+use crate::glide::{on_appear, on_style_change};
 use crate::windows::{Entry, Shell};
 use lutece::{Change, Effect, Placement, SpawnCommand, WinId};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -54,6 +55,12 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
             }
             Change::Style { id, style } => {
                 if let Some(entry) = state.windows.get_mut(*id) {
+                    // A window that is not on screen has nothing to glide from: it starts
+                    // at its new look when it appears (see `place`).
+                    let now = Instant::now();
+                    entry.style_glide = entry
+                        .rect
+                        .and_then(|_| on_style_change(&entry.drawn_style(now), style, now));
                     entry.style = *style;
                 }
             }
@@ -115,7 +122,13 @@ fn place(state: &mut State, placement: &Placement, animate: bool) {
     // now, so the window never jumps.
     let now = Instant::now();
     let from = entry.drawn_rect(now);
+    let was_hidden = entry.rect.is_none();
     entry.rect = Some(placement.rect);
+    // A window that comes on screen (a new one, or one back with its workspace) fades in if
+    // its style says so; one that only moves keeps the glide it has.
+    if was_hidden {
+        entry.style_glide = on_appear(&entry.style, now);
+    }
     entry.animation = from
         .filter(|from| animate && *from != placement.rect)
         .filter(|_| entry.style.transition().duration_ms > 0)

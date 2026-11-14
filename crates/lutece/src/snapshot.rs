@@ -202,6 +202,12 @@ pub enum CurveState {
     EaseInOut,
 }
 
+/// The glide of a style a file says nothing about: moves only, as before glides existed.
+#[cfg(feature = "serde")]
+fn default_glide_bits() -> u8 {
+    crate::Glide::default().bits()
+}
+
 /// A window's look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -218,6 +224,10 @@ pub struct StyleState {
     pub curve: CurveState,
     /// The duration of the animation in milliseconds.
     pub duration_ms: u16,
+    /// Which changes glide, one bit per kind (see `Glide`). A file written before the
+    /// field existed reads as the default, which is what those windows did.
+    #[cfg_attr(feature = "serde", serde(default = "default_glide_bits"))]
+    pub glide: u8,
     /// Height of the band above the window.
     pub title_bar_height: u16,
     /// Colour of the band above the window.
