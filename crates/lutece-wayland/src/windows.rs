@@ -120,6 +120,9 @@ pub(crate) struct Look {
     /// What the client calls the window, for the title bar; empty when the style has no bar,
     /// so a window without one costs no copy.
     pub(crate) title: String,
+    /// How far the window's style glide is, from 0 to 1; 1 when it rests. Only a user's effect
+    /// reads it.
+    pub(crate) progress: f32,
 }
 
 impl Look {
@@ -130,6 +133,7 @@ impl Look {
             target: Rectangle::new(self.target.loc - by, self.target.size),
             drawn: Rectangle::new(self.drawn.loc - by, self.drawn.size),
             title: self.title.clone(),
+            progress: self.progress,
         }
     }
 }
@@ -483,6 +487,11 @@ fn window_layers(id: WinId, entry: &Entry, target: Rect, title: &str, now: Insta
             } else {
                 String::new()
             },
+            progress: entry
+                .style_glide
+                .as_ref()
+                .filter(|glide| !glide.finished(now))
+                .map_or(1.0, |glide| glide.progress_at(now)),
         }),
     });
     layers

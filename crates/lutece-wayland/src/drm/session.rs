@@ -392,6 +392,22 @@ impl DrmBackend {
         self.wayland.mark_damage();
     }
 
+    /// Draws every window through the user's effect (`Some`, the source of the file, see
+    /// [`window_effect_source`](crate::window_effect_source)), or as before (`None`). On an
+    /// error the effect in use stays, so a shader that does not compile costs nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the rule the source breaks, or the driver's message if it does not compile.
+    pub fn set_window_effect(
+        &mut self,
+        source: Option<&str>,
+    ) -> std::result::Result<(), crate::EffectError> {
+        self.shaders.set_effect(&mut self.renderer, source)?;
+        self.wayland.mark_damage();
+        Ok(())
+    }
+
     /// Sets when the screen is drawn again; see [`Redraw`].
     pub fn set_redraw(&mut self, redraw: Redraw) {
         self.redraw = redraw;

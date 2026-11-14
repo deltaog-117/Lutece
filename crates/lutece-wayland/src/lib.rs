@@ -29,6 +29,7 @@ mod compositor;
 mod dmabuf;
 #[cfg(feature = "drm")]
 mod drm;
+mod effect;
 mod error;
 mod focus;
 mod glide;
@@ -57,6 +58,7 @@ pub use drm::{
     DrmBackend, ModeInfo, PatternReport, Redraw, ScreenSettings, best_mode, pattern_color,
     pick_crtc, show_test_pattern,
 };
+pub use effect::{EffectError, MAX_EFFECT_BYTES, check_effect, window_effect_source};
 pub use error::{Error, Result};
 pub use nested::NestedBackend;
 pub use outline::Outline;

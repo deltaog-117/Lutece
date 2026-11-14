@@ -40,6 +40,12 @@ impl StyleGlide {
         u16::try_from(value).unwrap_or(u16::MAX)
     }
 
+    /// How far along the glide is at `now`, eased, from 0 to 1. For a user's effect.
+    pub(crate) fn progress_at(&self, now: Instant) -> f32 {
+        // Within 0 to 1 by the clamp, so the narrowing loses nothing a shader could see.
+        self.eased(now).clamp(0.0, 1.0) as f32
+    }
+
     fn eased(&self, now: Instant) -> f64 {
         ease(self.transition.curve, self.progress(now))
     }

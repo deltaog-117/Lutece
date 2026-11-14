@@ -183,8 +183,16 @@ impl Engine {
         })
     }
 
+    /// The style a plugin gave `id`, or `None` while it has the default one. A kernel that
+    /// builds its own scene needs it, since the engine keeps styles as part of its state.
+    #[must_use]
+    pub fn style_of(&self, id: WinId) -> Option<Style> {
+        self.styles.get(&id).copied()
+    }
+
     /// The area `output` covers, if the backend reported it. A fullscreen window fills it.
-    fn area_of(&self, output: OutputId) -> Option<Rect> {
+    #[must_use]
+    pub fn area_of(&self, output: OutputId) -> Option<Rect> {
         self.outputs
             .iter()
             .find(|reported| reported.id == output)
@@ -192,7 +200,8 @@ impl Engine {
     }
 
     /// The area of `output` left for tiled and floating windows once bars took theirs.
-    fn work_area_of(&self, output: OutputId) -> Option<Rect> {
+    #[must_use]
+    pub fn work_area_of(&self, output: OutputId) -> Option<Rect> {
         let area = self.area_of(output)?;
         let reserved = self.reserved.get(&output).copied().unwrap_or_default();
         Some(area.inset(reserved.limited_to(area)))

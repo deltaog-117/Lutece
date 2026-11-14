@@ -1750,3 +1750,18 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-14 | Initial entry | deltaog-117 |
+
+
+### 2026-11-14 – A kernel's name, three accessors and a window effect
+
+- **Scope:** three small changes asked for by window-manager's canvas kernel and user shaders; the reasoning is in that repository's diary.
+- **`Kernel::NAME`:** required, not defaulted, so a kernel cannot forget to name itself and be mistaken for the engine in a stored file. Breaking for a kernel written elsewhere; the only ones are the engine and two in window-manager.
+- **Accessors:** `area_of`, `work_area_of` and `style_of` were private and are now public and `#[must_use]`; a kernel that places windows itself needs the output's work area and the styles to build its scene.
+- **The effect:** `WINDOW_SHADER` has two marker comments, so the effect variant is the same text with a user's function and a call spliced in; a test validates the unchanged shader and four built ones with `glslangValidator`. `Look` carries `progress`, read from the style glide with a new `StyleGlide::progress_at`. `Shaders::set_effect` compiles the variant and leaves the old effect on an error. An effect draws every window, so `window_elements` takes the shader path when there is one even for square corners.
+- **Tests:** 8 for the rules and the built shaders (property tests of the checker included). Compiled on this machine's real driver through window-manager's host. Not looked at on a screen.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-14 | Initial entry | deltaog-117 |

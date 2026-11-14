@@ -12,6 +12,8 @@ use crate::snapshot::{Snapshot, VERSION};
 impl Kernel for Engine {
     type Snapshot = Snapshot;
 
+    const NAME: &'static str = "workspaces";
+
     const STATE_VERSION: u32 = VERSION;
 
     fn handle(&mut self, event: Event) -> Vec<Effect> {

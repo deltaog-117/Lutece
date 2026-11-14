@@ -47,6 +47,10 @@ pub trait Kernel: Clone + PartialEq + Debug {
     /// The kernel's state as plain data, for checkpoints.
     type Snapshot: Clone + PartialEq + Debug;
 
+    /// What the kernel is called, for a file that stores its state: two kernels may one day
+    /// share a state version, and the name is what tells a reader whose file it holds.
+    const NAME: &'static str;
+
     /// The layout number of [`Snapshot`](Self::Snapshot). A reader that finds another
     /// number must not try to read the data.
     const STATE_VERSION: u32;

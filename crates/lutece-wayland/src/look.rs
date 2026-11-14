@@ -5,6 +5,7 @@
 //! shader around the window. Both measure in framebuffer pixels, so they follow the
 //! window however it is scaled while it moves.
 
+use crate::effect::{EffectError, window_effect_source};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{
@@ -14,7 +15,7 @@ use smithay::backend::renderer::gles::{
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Transform};
 
-const WINDOW_SHADER: &str = r"#version 100
+pub(crate) const WINDOW_SHADER: &str = r"#version 100
 //_DEFINES_
 
 #if defined(EXTERNAL)
@@ -44,6 +45,7 @@ uniform vec4 clip_rect;
 uniform float clip_radius;
 uniform float fb_height;
 uniform float flip;
+//_EFFECT_DECL_
 
 float rounded_distance(vec2 p, vec2 half_size, float radius) {
     vec2 q = abs(p) - half_size + vec2(radius);
@@ -58,6 +60,7 @@ void main() {
 #else
     color = color * alpha;
 #endif
+    //_EFFECT_CALL_
 
     // Windows are placed from the top of the output. Seen on screen: with the frame drawn
     // flipped, gl_FragCoord's y counts from the bottom of the picture, so it is turned over.
@@ -177,6 +180,9 @@ void main() {
 #[derive(Debug, Clone)]
 pub(crate) struct Shaders {
     window: GlesTexProgram,
+    /// The window shader with the user's effect spliced in, while there is one. It draws
+    /// every window in place of `window`.
+    effect: Option<GlesTexProgram>,
     border: GlesPixelProgram,
     bar: GlesPixelProgram,
     shadow: GlesPixelProgram,
@@ -228,10 +234,50 @@ impl Shaders {
         )?;
         Ok(Self {
             window,
+            effect: None,
             border,
             bar,
             shadow,
         })
+    }
+
+    /// Draws every window with the user's effect from now on (`Some`), or as before (`None`).
+    /// On an error the effect in use is left as it was, so a shader that does not compile
+    /// never takes the screen away.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectError`] if the source breaks a rule of [`window_effect_source`] or the
+    /// driver refuses to compile it.
+    pub(crate) fn set_effect(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        source: Option<&str>,
+    ) -> Result<(), EffectError> {
+        let Some(user) = source else {
+            self.effect = None;
+            return Ok(());
+        };
+        let assembled = window_effect_source(user)?;
+        let program = renderer
+            .compile_custom_texture_shader(
+                assembled,
+                &[
+                    UniformName::new("clip_rect", UniformType::_4f),
+                    UniformName::new("clip_radius", UniformType::_1f),
+                    UniformName::new("fb_height", UniformType::_1f),
+                    UniformName::new("flip", UniformType::_1f),
+                    UniformName::new("progress", UniformType::_1f),
+                ],
+            )
+            .map_err(|error| EffectError::Compile(error.to_string()))?;
+        self.effect = Some(program);
+        Ok(())
+    }
+
+    /// Whether an effect draws the windows.
+    pub(crate) const fn has_effect(&self) -> bool {
+        self.effect.is_some()
     }
 
     /// The ring that is a window's border: `area` is the window grown by the border's width
@@ -328,7 +374,8 @@ impl Shaders {
 
     /// Wraps `inner` so its surfaces are drawn with the corners cut to `radius` (physical
     /// pixels) inside `rect`. `fb_height` is the framebuffer's height, and `flip` is true
-    /// when the frame is drawn flipped, which turns the framebuffer's y axis over.
+    /// when the frame is drawn flipped, which turns the framebuffer's y axis over. `progress`
+    /// is how far a gliding window is, from 0 to 1, and 1 at rest; only a user effect reads it.
     pub(crate) fn rounded<E>(
         &self,
         inner: E,
@@ -336,8 +383,9 @@ impl Shaders {
         radius: f32,
         fb_height: i32,
         flip: bool,
+        progress: f32,
     ) -> Styled<E> {
-        let uniforms = vec![
+        let mut uniforms = vec![
             Uniform::new(
                 "clip_rect",
                 [
@@ -351,9 +399,16 @@ impl Shaders {
             Uniform::new("fb_height", fb_height as f32),
             Uniform::new("flip", if flip { 1.0f32 } else { 0.0 }),
         ];
+        let program = match &self.effect {
+            Some(effect) => {
+                uniforms.push(Uniform::new("progress", progress));
+                effect.clone()
+            }
+            None => self.window.clone(),
+        };
         Styled {
             inner,
-            override_with: Some((self.window.clone(), uniforms)),
+            override_with: Some((program, uniforms)),
         }
     }
 }

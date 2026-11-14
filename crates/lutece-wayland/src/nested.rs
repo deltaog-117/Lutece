@@ -126,6 +126,20 @@ impl NestedBackend {
         self.outlines = outlines;
     }
 
+    /// Draws every window through the user's effect (`Some`, the source of the file, see
+    /// [`window_effect_source`](crate::window_effect_source)), or as before (`None`). On an
+    /// error the effect in use stays, so a shader that does not compile costs nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the rule the source breaks, or the driver's message if it does not compile.
+    pub fn set_window_effect(
+        &mut self,
+        source: Option<&str>,
+    ) -> std::result::Result<(), crate::EffectError> {
+        self.shaders.set_effect(self.graphics.renderer(), source)
+    }
+
     /// Makes the window read-only, or lets it take input again. While it is read-only, the
     /// keyboard and pointer of the window do nothing: no key reaches the core or a client,
     /// and the pointer does not move on the screen. Only the release of a key or button

@@ -184,8 +184,16 @@ fn window_elements(
         let Some(cropped) = CropRenderElement::from_element(rescaled, factor, drawn) else {
             continue;
         };
-        let element = if radius > 0.0 {
-            shaders.rounded(cropped, drawn, radius as f32, frame.h, flipped)
+        // A user's effect draws every window, even one with square corners.
+        let element = if radius > 0.0 || shaders.has_effect() {
+            shaders.rounded(
+                cropped,
+                drawn,
+                radius as f32,
+                frame.h,
+                flipped,
+                look.progress,
+            )
         } else {
             Styled::plain(cropped)
         };
