@@ -115,6 +115,7 @@ Needed before `lucarne` can be written on top of the library:
 - **Session lock and idle protocols** – what a login compositor needs on top of the hardware backend; only after that backend exists.
 - **`lucarne`, the suckless-style WM** – its own repository and its own dev loop, built on a tagged release of lutece; starts on X11, the more complete backend, unless the Wayland work above is done first. Building it shows which gaps in the library matter.
 - **Plugin protocol** – serializable `Event` and `Effect` over a socket, so the plugin-capable WM can host plugins in any language (lives in that WM, not this library).
+- **Render transforms for zoom** – the `Scene` cannot express a transform on a window, so a canvas kernel cannot scale live windows (zoom and semantic zoom, the Post-1.0.0 item in `window-manager`). First check whether Smithay's renderer takes a per-element transform: if it does, add the transform to `Scene` and to `lutece-wayland`'s render path; if it does not, decide between drawing scaled windows through an offscreen image and changing the backend. Not started; the check comes first, so no code changes the `Scene` until the answer is known.
 
 ---
 
