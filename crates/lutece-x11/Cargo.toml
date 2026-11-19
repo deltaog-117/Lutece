@@ -17,6 +17,7 @@ x11rb = { version = "0.14", features = ["randr"] }
 rustix = { version = "1", features = ["event"] }
 
 [dev-dependencies]
+lutece-layouts = { path = "../lutece-layouts" }
 proptest = "1"
 # XTEST lets the integration tests press keys the way a keyboard would.
 x11rb = { version = "0.14", features = ["xtest"] }

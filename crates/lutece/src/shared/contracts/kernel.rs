@@ -28,7 +28,7 @@ use std::fmt::Debug;
 /// # Examples
 ///
 /// ```
-/// use lutece::{Event, Kernel, Layout, Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo};
+/// use lutece::{Event, Kernel, LayoutName, Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo};
 ///
 /// // Written once, usable with any kernel.
 /// fn open_one<K: Kernel>(kernel: &mut K) -> Result<usize, lutece::Error> {
@@ -37,7 +37,7 @@ use std::fmt::Debug;
 /// }
 ///
 /// let stacks = StackSet::new([Tag::try_new("1")?])?;
-/// let mut engine = lutece::Engine::new(stacks, Layout::default());
+/// let mut engine = lutece::Engine::new(stacks, LayoutName::default());
 /// let screen = Output { id: OutputId::new(0), rect: Rect::new(0, 0, 800, 600)? };
 /// engine.handle(Event::OutputsChanged(vec![screen]));
 /// assert_eq!(open_one(&mut engine)?, 1);

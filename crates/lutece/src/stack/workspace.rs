@@ -1,7 +1,7 @@
 //! One workspace: an ordered list of windows with exactly one of them focused.
 
 use crate::float::Float;
-use crate::layout::{Layout, MasterRatio};
+use crate::layout::{LayoutName, LayoutSet, MasterRatio};
 use crate::shared::ids::{Tag, WinId};
 use std::collections::{HashMap, VecDeque};
 use std::iter;
@@ -143,10 +143,11 @@ pub struct Workspace {
     /// the hidden pool, so the order cannot be read from where it is stored.
     rank: usize,
     stack: Option<Stack>,
-    layout: Layout,
-    /// The master ratio the layouts with a master column get back when the layout cycles
-    /// round to them again. Only read while a layout without one is showing.
-    tile_ratio: MasterRatio,
+    layout: LayoutName,
+    /// The share of the width a master window takes. It belongs to the workspace and not to
+    /// a layout, so it is kept while a layout without a master column is showing and is
+    /// there again when the cycle returns to one with.
+    ratio: MasterRatio,
     /// The windows the layout leaves alone. Every key is a window in `stack`: `remove`
     /// drops the entry and `set_float` refuses strangers.
     floating: HashMap<WinId, Float>,
@@ -157,17 +158,13 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub(crate) fn empty(tag: Tag, layout: Layout, rank: usize) -> Self {
-        let tile_ratio = match layout {
-            Layout::Tile(ratio) | Layout::CenteredMaster(ratio) => ratio,
-            Layout::Monocle | Layout::Grid | Layout::External => MasterRatio::default(),
-        };
+    pub(crate) fn empty(tag: Tag, layout: LayoutName, rank: usize) -> Self {
         Self {
             tag,
             rank,
             stack: None,
             layout,
-            tile_ratio,
+            ratio: MasterRatio::default(),
             floating: HashMap::new(),
             fullscreen: None,
         }
@@ -233,62 +230,48 @@ impl Workspace {
         };
     }
 
-    /// How the workspace arranges its windows.
+    /// The name of the layout that arranges the workspace. The engine's
+    /// [`LayoutSet`] says what it is; a name the set does not have is arranged by the
+    /// fallback.
     #[must_use]
-    pub fn layout(&self) -> Layout {
-        self.layout
+    pub fn layout(&self) -> &LayoutName {
+        &self.layout
     }
 
-    /// Switches to the next layout (tile, monocle, grid, centered master), wrapping
-    /// around. The layouts with a master column keep the ratio it had when one was last
-    /// showing.
-    pub(crate) fn next_layout(&mut self) {
-        self.layout = match self.layout {
-            Layout::Tile(ratio) => {
-                self.tile_ratio = ratio;
-                Layout::Monocle
-            }
-            Layout::Monocle => Layout::Grid,
-            Layout::Grid => Layout::CenteredMaster(self.tile_ratio),
-            Layout::CenteredMaster(ratio) => {
-                self.tile_ratio = ratio;
-                Layout::Tile(ratio)
-            }
-            // The cycle covers the built-in layouts; an external one is entered and left
-            // with `toggle_external`.
-            Layout::External => Layout::Tile(self.tile_ratio),
+    /// The share of the width a master window takes, for the layouts that have one.
+    #[must_use]
+    pub fn ratio(&self) -> MasterRatio {
+        self.ratio
+    }
+
+    /// Switches to the next layout of `layouts`, wrapping around. From the external layout,
+    /// or one `layouts` does not have, it goes to the first.
+    pub(crate) fn next_layout(&mut self, layouts: &LayoutSet) {
+        self.layout = layouts.next_after(&self.layout);
+    }
+
+    /// Switches between the external layout and the first layout of `layouts`.
+    pub(crate) fn toggle_external(&mut self, layouts: &LayoutSet) {
+        self.layout = if self.layout.is_external() {
+            layouts.first()
+        } else {
+            LayoutName::external()
         };
     }
 
-    /// Switches between the external layout and a tile layout.
-    pub(crate) fn toggle_external(&mut self) {
-        self.layout = match self.layout {
-            Layout::External => Layout::Tile(self.tile_ratio),
-            Layout::Tile(ratio) | Layout::CenteredMaster(ratio) => {
-                self.tile_ratio = ratio;
-                Layout::External
-            }
-            Layout::Monocle | Layout::Grid => Layout::External,
-        };
-    }
-
-    /// Moves the master ratio by `delta` thousandths. Layouts without a master column
-    /// ignore it.
-    pub(crate) fn resize_master(&mut self, delta: i16) {
-        match self.layout {
-            Layout::Tile(ratio) => self.layout = Layout::Tile(ratio.step(delta)),
-            Layout::CenteredMaster(ratio) => {
-                self.layout = Layout::CenteredMaster(ratio.step(delta));
-            }
-            Layout::Monocle | Layout::Grid | Layout::External => {}
+    /// Moves the master ratio by `delta` thousandths. A layout without a master column
+    /// leaves it alone.
+    pub(crate) fn resize_master(&mut self, delta: i16, layouts: &LayoutSet) {
+        if layouts
+            .get(&self.layout)
+            .is_some_and(|layout| layout.uses_master_ratio())
+        {
+            self.ratio = self.ratio.step(delta);
         }
     }
 
-    pub(crate) fn set_layout(&mut self, layout: Layout) {
+    pub(crate) fn set_layout(&mut self, layout: LayoutName) {
         self.layout = layout;
-        if let Layout::Tile(ratio) | Layout::CenteredMaster(ratio) = layout {
-            self.tile_ratio = ratio;
-        }
     }
 
     /// The workspace's name.
@@ -379,6 +362,9 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::Layout;
+    use crate::shared::contracts::scene::Placement;
+    use crate::shared::geometry::Rect;
     use proptest::prelude::*;
     use std::collections::HashSet;
 
@@ -411,53 +397,96 @@ mod tests {
             })
     }
 
-    fn workspace(layout: Layout) -> Workspace {
+    fn workspace(layout: LayoutName) -> Workspace {
         Workspace::empty(Tag::try_new("1").expect("tag has text"), layout, 0)
     }
 
-    fn ratio(permille: u16) -> MasterRatio {
-        MasterRatio::try_new(permille).expect("in range")
+    /// A layout that only says whether it has a master column; where it puts windows is
+    /// not what these tests are about.
+    #[derive(Debug)]
+    struct Stub {
+        master: bool,
     }
 
-    #[test]
-    fn cycling_the_layout_brings_tile_back_with_its_ratio() {
-        let mut ws = workspace(Layout::Tile(ratio(550)));
-        ws.resize_master(100);
-        ws.next_layout();
-        assert_eq!(ws.layout(), Layout::Monocle);
-        ws.next_layout();
-        assert_eq!(ws.layout(), Layout::Grid);
-        ws.next_layout();
-        assert_eq!(ws.layout(), Layout::CenteredMaster(ratio(650)));
-        ws.next_layout();
-        assert_eq!(ws.layout(), Layout::Tile(ratio(650)));
-    }
-
-    #[test]
-    fn resizing_the_master_does_nothing_in_monocle_or_grid() {
-        for layout in [Layout::Monocle, Layout::Grid] {
-            let mut ws = workspace(layout);
-            ws.resize_master(100);
-            assert_eq!(ws.layout(), layout);
+    impl Layout for Stub {
+        fn arrange(
+            &self,
+            _area: Rect,
+            _windows: &[WinId],
+            _focus: Option<WinId>,
+            _ratio: MasterRatio,
+        ) -> crate::Result<Vec<Placement>> {
+            Ok(Vec::new())
         }
-        let mut ws = workspace(Layout::Monocle);
-        ws.next_layout();
-        ws.next_layout();
-        assert_eq!(ws.layout(), Layout::CenteredMaster(MasterRatio::default()));
+
+        fn uses_master_ratio(&self) -> bool {
+            self.master
+        }
+    }
+
+    fn name(text: &str) -> LayoutName {
+        LayoutName::try_new(text).expect("valid name")
+    }
+
+    /// `side` has a master column, `flat` has none, `other` has one.
+    fn layouts() -> LayoutSet {
+        let mut set = LayoutSet::new();
+        for (text, master) in [("side", true), ("flat", false), ("other", true)] {
+            set.register(name(text), Box::new(Stub { master }))
+                .expect("distinct names");
+        }
+        set
     }
 
     #[test]
-    fn resizing_the_master_moves_the_centered_ratio_and_tile_inherits_it() {
-        let mut ws = workspace(Layout::CenteredMaster(ratio(550)));
-        ws.resize_master(100);
-        assert_eq!(ws.layout(), Layout::CenteredMaster(ratio(650)));
-        ws.next_layout();
-        assert_eq!(ws.layout(), Layout::Tile(ratio(650)));
+    fn cycling_goes_through_the_set_in_order_and_keeps_the_ratio() {
+        let set = layouts();
+        let mut ws = workspace(name("side"));
+        ws.resize_master(100, &set);
+        for next in ["flat", "other", "side"] {
+            ws.next_layout(&set);
+            assert_eq!(ws.layout(), &name(next));
+        }
+        assert_eq!(ws.ratio().permille(), 650);
+    }
+
+    #[test]
+    fn resizing_the_master_does_nothing_without_a_master_column() {
+        let set = layouts();
+        let mut ws = workspace(name("flat"));
+        ws.resize_master(100, &set);
+        assert_eq!(ws.ratio(), MasterRatio::default());
+        ws.set_layout(name("other"));
+        ws.resize_master(100, &set);
+        assert_eq!(ws.ratio().permille(), 650);
+    }
+
+    #[test]
+    fn a_layout_the_set_does_not_have_gets_no_resize_and_cycles_to_the_first() {
+        let set = layouts();
+        let mut ws = workspace(name("missing"));
+        ws.resize_master(100, &set);
+        assert_eq!(ws.ratio(), MasterRatio::default());
+        ws.next_layout(&set);
+        assert_eq!(ws.layout(), &name("side"));
+    }
+
+    #[test]
+    fn toggling_the_external_layout_comes_back_to_the_first_layout() {
+        let set = layouts();
+        let mut ws = workspace(name("flat"));
+        ws.toggle_external(&set);
+        assert!(ws.layout().is_external());
+        ws.next_layout(&set);
+        assert_eq!(ws.layout(), &name("side"));
+        ws.toggle_external(&set);
+        ws.toggle_external(&set);
+        assert_eq!(ws.layout(), &name("side"));
     }
 
     #[test]
     fn a_floating_window_is_forgotten_when_it_leaves() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         ws.insert(w(1));
         ws.insert(w(2));
         ws.set_float(w(1), Some(Float::default()));
@@ -471,7 +500,7 @@ mod tests {
 
     #[test]
     fn only_windows_on_the_workspace_can_float() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         ws.insert(w(1));
         ws.set_float(w(9), Some(Float::default()));
         assert!(!ws.is_floating(w(9)));
@@ -483,7 +512,7 @@ mod tests {
 
     #[test]
     fn floats_come_out_in_stacking_order() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         for id in [1, 2, 3] {
             ws.insert(w(id));
             ws.set_float(w(id), Some(Float::default()));
@@ -494,7 +523,7 @@ mod tests {
 
     #[test]
     fn fullscreen_belongs_to_the_focused_window_only() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         ws.insert(w(1));
         ws.insert(w(2));
         ws.set_fullscreen(w(2), true);
@@ -508,7 +537,7 @@ mod tests {
 
     #[test]
     fn fullscreen_ends_when_the_window_closes_or_a_new_one_opens() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         ws.insert(w(1));
         ws.set_fullscreen(w(1), true);
         ws.insert(w(2));
@@ -521,7 +550,7 @@ mod tests {
 
     #[test]
     fn asking_for_fullscreen_focuses_the_window_and_replaces_the_old_one() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         ws.insert(w(1));
         ws.insert(w(2));
         ws.set_fullscreen(w(2), true);
@@ -539,7 +568,7 @@ mod tests {
 
     #[test]
     fn swapping_keeps_the_focused_window_fullscreen() {
-        let mut ws = workspace(Layout::default());
+        let mut ws = workspace(LayoutName::default());
         ws.insert(w(1));
         ws.insert(w(2));
         ws.set_fullscreen(w(2), true);

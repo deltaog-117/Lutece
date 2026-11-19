@@ -1,8 +1,8 @@
 //! Custom commands, the pointer entering a window, and a window's changed title.
 
 use lutece::{
-    Action, CommandName, Effect, Engine, Event, KeyPress, Keymap, Keysym, Layout, Modifiers,
-    Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo,
+    Action, CommandName, Effect, Engine, Event, KeyPress, Keymap, Keysym, Modifiers, Output,
+    OutputId, Rect, StackSet, Tag, WinId, WindowInfo,
 };
 
 fn tag(name: &str) -> Tag {
@@ -12,8 +12,9 @@ fn tag(name: &str) -> Tag {
 fn engine() -> Engine {
     let mut engine = Engine::new(
         StackSet::new(["1"].map(tag)).expect("one tag"),
-        Layout::default(),
-    );
+        lutece_layouts::builtin().first(),
+    )
+    .with_layouts(lutece_layouts::builtin());
     engine.handle(Event::OutputsChanged(vec![Output {
         id: OutputId::new(0),
         rect: Rect::new(0, 0, 1000, 600).expect("non-zero size"),

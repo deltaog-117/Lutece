@@ -37,9 +37,7 @@
 //! cargo run -p lutece-wayland --example minimal_wayland
 //! ```
 
-use lutece::{
-    Action, Engine, KeyPress, Keymap, Keysym, Layout, Modifiers, SpawnCommand, StackSet, Tag,
-};
+use lutece::{Action, Engine, KeyPress, Keymap, Keysym, Modifiers, SpawnCommand, StackSet, Tag};
 use lutece_wayland::{Error, Flow, NestedBackend};
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -91,8 +89,10 @@ fn main() -> Result<()> {
     let tags = ('1'..='9')
         .map(|digit| Tag::try_new(digit.to_string()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut engine =
-        Engine::new(StackSet::new(tags.clone())?, Layout::default()).with_keymap(keymap(&tags)?);
+    let layouts = lutece_layouts::builtin();
+    let mut engine = Engine::new(StackSet::new(tags.clone())?, layouts.first())
+        .with_layouts(layouts)
+        .with_keymap(keymap(&tags)?);
     let outputs = std::env::var("LUTECE_OUTPUTS")
         .ok()
         .and_then(|count| count.parse::<NonZeroU32>().ok())

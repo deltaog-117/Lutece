@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/lutece",
+    "crates/lutece-layouts",
     "crates/lutece-x11",
     "crates/lutece-wayland",
 ]

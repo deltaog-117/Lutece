@@ -31,6 +31,7 @@ thiserror = "2"
 x11rb = "0.14"
 
 [dev-dependencies]
+lutece-layouts = { path = "../lutece-layouts" }
 proptest = "1"
 tempfile = "3"
 wayland-client = "0.31"

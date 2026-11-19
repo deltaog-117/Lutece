@@ -2,7 +2,7 @@
 //! choice at once and asks a plugin, whose answer moves the focus only if nothing else has.
 
 use lutece::{
-    Action, Effect, Engine, Event, Layout, Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo,
+    Action, Effect, Engine, Event, Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo,
 };
 use proptest::prelude::*;
 
@@ -25,7 +25,9 @@ fn open(raw: u64) -> Event {
 /// 3 has the focus.
 fn engine_with_three() -> Engine {
     let stacks = StackSet::new(["1", "2"].map(tag)).expect("two distinct tags");
-    let mut engine = Engine::new(stacks, Layout::default()).with_focus_hook(true);
+    let mut engine = Engine::new(stacks, lutece_layouts::builtin().first())
+        .with_layouts(lutece_layouts::builtin())
+        .with_focus_hook(true);
     engine.handle(Event::OutputsChanged(vec![Output {
         id: OutputId::new(0),
         rect: Rect::new(0, 0, 1000, 600).expect("non-zero size"),

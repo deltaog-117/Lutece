@@ -1,12 +1,13 @@
 //! Centered master: the first window takes a column in the middle and the rest share
 //! the two columns beside it.
 
-use super::span::split;
-use super::tile::{self, MasterRatio};
-use crate::shared::contracts::scene::Placement;
-use crate::shared::error::{Error, Result};
-use crate::shared::geometry::Rect;
-use crate::shared::ids::WinId;
+use crate::span::split;
+use crate::tile;
+use lutece::MasterRatio;
+use lutece::Placement;
+use lutece::Rect;
+use lutece::WinId;
+use lutece::{Error, Result};
 
 /// Places `windows` (master first) so the rectangles exactly cover `area`.
 ///

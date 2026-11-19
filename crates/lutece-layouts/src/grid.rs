@@ -1,10 +1,10 @@
 //! Grid: the windows fill rows of equal height, as square as the count allows.
 
-use super::span::split;
-use crate::shared::contracts::scene::Placement;
-use crate::shared::error::{Error, Result};
-use crate::shared::geometry::Rect;
-use crate::shared::ids::WinId;
+use crate::span::split;
+use lutece::Placement;
+use lutece::Rect;
+use lutece::WinId;
+use lutece::{Error, Result};
 
 /// Places `windows` row by row so the rectangles exactly cover `area`.
 ///

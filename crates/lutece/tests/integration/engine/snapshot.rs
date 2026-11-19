@@ -2,10 +2,10 @@
 //! invented is refused.
 
 use super::replay::{arbitrary_event, keymap};
-use lutece::snapshot::{LayoutState, VERSION};
+use lutece::snapshot::VERSION;
 use lutece::{
-    Action, Engine, Error, Event, Layout, ManageDecision, Output, OutputId, PropertyKey,
-    PropertyTarget, PropertyValue, Rect, StackSet, Tag, WinId, WindowInfo,
+    Action, Engine, Error, Event, ManageDecision, Output, OutputId, PropertyKey, PropertyTarget,
+    PropertyValue, Rect, StackSet, Tag, WinId, WindowInfo,
 };
 use proptest::prelude::*;
 
@@ -22,7 +22,8 @@ fn template() -> Engine {
     stacks.focus_tag(&tag("3")).expect("workspace exists");
     stacks.insert(WinId::new(1)).expect("new window");
     stacks.focus_tag(&tag("1")).expect("workspace exists");
-    Engine::new(stacks, Layout::default())
+    Engine::new(stacks, lutece_layouts::builtin().first())
+        .with_layouts(lutece_layouts::builtin())
         .with_keymap(keymap())
         .with_manage_hook(true)
         .with_focus_hook(true)
@@ -243,8 +244,8 @@ fn a_missing_workspace_is_refused() {
 
 #[test]
 fn a_ratio_the_layout_cannot_have_is_refused() {
-    refused(|snapshot| snapshot.screens[0].workspace.layout = LayoutState::Tile(0));
-    refused(|snapshot| snapshot.screens[0].workspace.tile_ratio = 1000);
+    refused(|snapshot| snapshot.screens[0].workspace.ratio = 0);
+    refused(|snapshot| snapshot.screens[0].workspace.ratio = 1000);
 }
 
 #[test]

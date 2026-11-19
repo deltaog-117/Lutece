@@ -1,8 +1,8 @@
 //! Monocle: every window fills the whole area and the focused one is on top.
 
-use crate::shared::contracts::scene::Placement;
-use crate::shared::geometry::Rect;
-use crate::shared::ids::WinId;
+use lutece::Placement;
+use lutece::Rect;
+use lutece::WinId;
 
 /// Stacks all windows at `area`, bottom to top, with `focus` last so it is the one seen.
 /// A `focus` that is not among `windows` is ignored.

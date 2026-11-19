@@ -210,10 +210,10 @@ impl Engine {
             Action::FocusPrev => self.stacks.focus_prev(),
             Action::SwapNext => self.stacks.swap_next(),
             Action::SwapPrev => self.stacks.swap_prev(),
-            Action::NextLayout => self.stacks.next_layout(),
-            Action::ToggleExternalLayout => self.stacks.toggle_external_layout(),
-            Action::GrowMaster => self.stacks.resize_master(MASTER_STEP),
-            Action::ShrinkMaster => self.stacks.resize_master(-MASTER_STEP),
+            Action::NextLayout => self.stacks.next_layout(&self.layouts),
+            Action::ToggleExternalLayout => self.stacks.toggle_external_layout(&self.layouts),
+            Action::GrowMaster => self.stacks.resize_master(MASTER_STEP, &self.layouts),
+            Action::ShrinkMaster => self.stacks.resize_master(-MASTER_STEP, &self.layouts),
             // A tag nobody has (a binding written for another set of workspaces) is
             // ignored, like any other request that no longer applies.
             Action::ViewTag(tag) => {

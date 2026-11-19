@@ -5,10 +5,10 @@
 //! [`X11Backend::connect`] and repeats three steps:
 //!
 //! ```no_run
-//! use lutece::{Engine, Layout, StackSet, Tag};
+//! use lutece::{Engine, LayoutName, StackSet, Tag};
 //! use lutece_x11::{Flow, X11Backend};
 //!
-//! let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, Layout::default());
+//! let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, LayoutName::default());
 //! let mut backend = X11Backend::connect()?;
 //! backend.grab_keys(engine.grabs())?;
 //!

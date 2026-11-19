@@ -19,7 +19,7 @@
 
 /// The layout of the snapshot, raised when a field changes meaning or is added. A snapshot
 /// with another version is refused, not guessed at.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// What an engine knows about the session at one moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,10 +72,10 @@ pub struct WorkspaceState {
     pub rank: usize,
     /// Its windows, or `None` when it has none.
     pub stack: Option<StackState>,
-    /// How it arranges them.
-    pub layout: LayoutState,
-    /// The master ratio a layout with a master column gets back, in thousandths.
-    pub tile_ratio: u16,
+    /// The name of the layout that arranges them, `external` for a plugin's.
+    pub layout: String,
+    /// The share of the width a master window takes, in thousandths.
+    pub ratio: u16,
     /// The windows the layout leaves alone, by window.
     pub floating: Vec<FloatState>,
     /// The window that fills the screen, if any.
@@ -92,22 +92,6 @@ pub struct StackState {
     pub focus: u64,
     /// The windows after the focus; the one nearest the focus is first.
     pub down: Vec<u64>,
-}
-
-/// How a workspace arranges its windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum LayoutState {
-    /// The tile layout, with its master ratio in thousandths.
-    Tile(u16),
-    /// The monocle layout.
-    Monocle,
-    /// The grid layout.
-    Grid,
-    /// The centered-master layout, with its master ratio in thousandths.
-    CenteredMaster(u16),
-    /// The layout a plugin supplies.
-    External,
 }
 
 /// How a floating window differs from the default rectangle, in pixels.

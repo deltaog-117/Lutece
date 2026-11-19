@@ -6,7 +6,7 @@ use crate::shared::names::CommandName;
 
 /// An operation a key binding triggers.
 ///
-/// A closed enum, like [`Layout`](crate::Layout): a binding is a value that can be
+/// A closed enum, like [`Event`](crate::Event): a binding is a value that can be
 /// compared and stored, and the compiler flags every `match` that misses a new action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

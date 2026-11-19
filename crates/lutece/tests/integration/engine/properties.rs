@@ -2,8 +2,8 @@
 //! identical after a replay.
 
 use lutece::{
-    Engine, Event, Layout, MAX_PROPERTIES_PER_TARGET, Output, OutputId, PropertyKey,
-    PropertyTarget, PropertyValue, Rect, StackSet, Tag, WinId, WindowInfo,
+    Engine, Event, MAX_PROPERTIES_PER_TARGET, Output, OutputId, PropertyKey, PropertyTarget,
+    PropertyValue, Rect, StackSet, Tag, WinId, WindowInfo,
 };
 use proptest::prelude::*;
 
@@ -14,8 +14,9 @@ fn tag(name: &str) -> Tag {
 fn engine_with_window() -> Engine {
     let mut engine = Engine::new(
         StackSet::new(["1", "2"].map(tag)).expect("two distinct tags"),
-        Layout::default(),
-    );
+        lutece_layouts::builtin().first(),
+    )
+    .with_layouts(lutece_layouts::builtin());
     engine.handle(Event::OutputsChanged(vec![Output {
         id: OutputId::new(0),
         rect: Rect::new(0, 0, 1000, 600).expect("non-zero size"),

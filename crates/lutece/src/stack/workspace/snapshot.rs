@@ -6,10 +6,10 @@
 
 use super::{Stack, Workspace};
 use crate::float::Float;
-use crate::layout::{Layout, MasterRatio};
+use crate::layout::{LayoutName, MasterRatio};
 use crate::shared::error::{Error, Result};
 use crate::shared::ids::{Tag, WinId};
-use crate::snapshot::{FloatState, LayoutState, StackState, WorkspaceState};
+use crate::snapshot::{FloatState, StackState, WorkspaceState};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 fn refused(tag: &str, why: impl std::fmt::Display) -> Error {
@@ -42,14 +42,8 @@ impl Workspace {
                 focus: stack.focus.get(),
                 down: stack.down.iter().map(|id| id.get()).collect(),
             }),
-            layout: match self.layout {
-                Layout::Tile(ratio) => LayoutState::Tile(ratio.permille()),
-                Layout::Monocle => LayoutState::Monocle,
-                Layout::Grid => LayoutState::Grid,
-                Layout::CenteredMaster(ratio) => LayoutState::CenteredMaster(ratio.permille()),
-                Layout::External => LayoutState::External,
-            },
-            tile_ratio: self.tile_ratio.permille(),
+            layout: self.layout.as_str().to_owned(),
+            ratio: self.ratio.permille(),
             floating,
             fullscreen: self.fullscreen.map(WinId::get),
         }
@@ -66,14 +60,9 @@ impl Workspace {
         let tag = Tag::try_new(state.tag.as_str()).map_err(|error| refused(&state.tag, error))?;
         let ratio =
             |permille| MasterRatio::try_new(permille).map_err(|error| refused(&state.tag, error));
-        let layout = match state.layout {
-            LayoutState::Tile(permille) => Layout::Tile(ratio(permille)?),
-            LayoutState::Monocle => Layout::Monocle,
-            LayoutState::Grid => Layout::Grid,
-            LayoutState::CenteredMaster(permille) => Layout::CenteredMaster(ratio(permille)?),
-            LayoutState::External => Layout::External,
-        };
-        let tile_ratio = ratio(state.tile_ratio)?;
+        let layout = LayoutName::try_new(state.layout.as_str())
+            .map_err(|error| refused(&state.tag, error))?;
+        let ratio = ratio(state.ratio)?;
 
         let stack = match &state.stack {
             None => None,
@@ -136,7 +125,7 @@ impl Workspace {
             rank: state.rank,
             stack,
             layout,
-            tile_ratio,
+            ratio,
             floating,
             fullscreen,
         })

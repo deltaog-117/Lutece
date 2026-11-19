@@ -2,7 +2,6 @@
 
 use super::Engine;
 use super::external::Key;
-use crate::layout::Layout;
 use crate::shared::contracts::scene::{Placement, Scene};
 use crate::shared::error::Result;
 use crate::shared::ids::WinId;
@@ -32,7 +31,7 @@ impl Engine {
                 .windows()
                 .filter(|&id| !workspace.is_floating(id))
                 .collect();
-            let mut here = if workspace.layout() == Layout::External {
+            let mut here = if workspace.layout().is_external() {
                 let key = Key {
                     area: work,
                     windows: tiled.clone(),
@@ -40,12 +39,20 @@ impl Engine {
                 match self.answer_for(workspace.tag(), &key) {
                     Some(answer) => answer.to_vec(),
                     // No answer fits yet: the default layout keeps the screen usable.
-                    None => Layout::default().arrange(work, &tiled, workspace.focus())?,
+                    None => self.layouts.resolve(&self.layouts.first()).arrange(
+                        work,
+                        &tiled,
+                        workspace.focus(),
+                        workspace.ratio(),
+                    )?,
                 }
             } else {
-                workspace
-                    .layout()
-                    .arrange(work, &tiled, workspace.focus())?
+                self.layouts.resolve(workspace.layout()).arrange(
+                    work,
+                    &tiled,
+                    workspace.focus(),
+                    workspace.ratio(),
+                )?
             };
             for (id, float) in workspace.floats() {
                 here.push(Placement {

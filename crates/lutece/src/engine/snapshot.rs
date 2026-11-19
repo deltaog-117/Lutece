@@ -359,6 +359,7 @@ impl Engine {
 
         Ok(Self {
             stacks,
+            layouts: template.layouts.clone(),
             keymap: template.keymap.clone(),
             rules: template.rules.clone(),
             outputs,

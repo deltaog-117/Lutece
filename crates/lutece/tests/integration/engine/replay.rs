@@ -2,9 +2,8 @@
 
 use lutece::{
     Action, Change, Curve, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap,
-    Keysym, Layout, ManageDecision, ManageRule, Match, Modifiers, Outcome, Output, OutputId,
-    Placement, Rect, Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId,
-    WindowInfo, diff,
+    Keysym, ManageDecision, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Placement,
+    Rect, Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId, WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -22,7 +21,7 @@ fn stacks() -> StackSet {
 }
 
 fn engine() -> Engine {
-    Engine::new(stacks(), Layout::default())
+    Engine::new(stacks(), lutece_layouts::builtin().first()).with_layouts(lutece_layouts::builtin())
 }
 
 fn screen(width: u32, height: u32) -> Event {
@@ -140,7 +139,8 @@ fn a_focus_request_for_a_window_elsewhere_switches_workspace() {
     stacks.insert(w(2)).expect("new window");
     stacks.focus_tag(&tag("1")).expect("workspace exists");
 
-    let mut engine = Engine::new(stacks, Layout::default());
+    let mut engine = Engine::new(stacks, lutece_layouts::builtin().first())
+        .with_layouts(lutece_layouts::builtin());
     replay(&mut engine, [screen(1000, 600)]);
     assert_eq!(ids(&scene(&engine)), [1]);
 
@@ -296,7 +296,7 @@ proptest! {
         stacks.insert(w(1)).expect("new window");
         stacks.focus_tag(&tag("1")).expect("workspace exists");
 
-        let mut engine = Engine::new(stacks, Layout::default()).with_keymap(keymap());
+        let mut engine = Engine::new(stacks, lutece_layouts::builtin().first()).with_layouts(lutece_layouts::builtin()).with_keymap(keymap());
         let mut model = Model { open: BTreeSet::from([0, 1]), has_screen: false };
 
         for event in events {
@@ -515,7 +515,7 @@ fn the_layout_key_cycles_and_tile_keeps_its_ratio() {
     engine.handle(pressed('g', Modifiers::SUPER));
 
     engine.handle(pressed('n', Modifiers::SUPER));
-    assert_eq!(engine.stacks().current().layout(), Layout::Monocle);
+    assert_eq!(engine.stacks().current().layout().as_str(), "monocle");
     assert!(
         scene(&engine)
             .placements()
@@ -530,12 +530,9 @@ fn the_layout_key_cycles_and_tile_keeps_its_ratio() {
 
     // Grid and centered master come between monocle and tile again.
     engine.handle(pressed('n', Modifiers::SUPER));
-    assert_eq!(engine.stacks().current().layout(), Layout::Grid);
+    assert_eq!(engine.stacks().current().layout().as_str(), "grid");
     engine.handle(pressed('n', Modifiers::SUPER));
-    assert!(matches!(
-        engine.stacks().current().layout(),
-        Layout::CenteredMaster(_)
-    ));
+    assert_eq!(engine.stacks().current().layout().as_str(), "centered");
     engine.handle(pressed('n', Modifiers::SUPER));
     assert_eq!(master_width(&engine), 600);
 }
@@ -550,11 +547,12 @@ fn each_workspace_keeps_its_own_layout() {
     engine.handle(pressed('2', shift));
     engine.handle(pressed('2', Modifiers::SUPER));
 
-    let layouts: Vec<_> = engine.stacks().workspaces().map(|ws| ws.layout()).collect();
-    assert_eq!(
-        layouts,
-        [Layout::Monocle, Layout::default(), Layout::default()]
-    );
+    let layouts: Vec<_> = engine
+        .stacks()
+        .workspaces()
+        .map(|ws| ws.layout().as_str())
+        .collect();
+    assert_eq!(layouts, ["monocle", "tile", "tile"]);
 }
 
 fn open_class(raw: u64, class: &str) -> Event {
@@ -1167,7 +1165,8 @@ fn a_fullscreen_request_does_not_switch_workspace() {
     stacks.focus_tag(&tag("2")).expect("workspace exists");
     stacks.insert(w(2)).expect("new window");
     stacks.focus_tag(&tag("1")).expect("workspace exists");
-    let mut engine = Engine::new(stacks, Layout::default());
+    let mut engine = Engine::new(stacks, lutece_layouts::builtin().first())
+        .with_layouts(lutece_layouts::builtin());
     replay(&mut engine, [screen(1000, 600), fullscreen(2, true)]);
 
     assert_eq!(ids(&scene(&engine)), [1]);

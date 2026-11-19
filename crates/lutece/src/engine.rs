@@ -12,7 +12,7 @@ mod scene_builder;
 mod snapshot;
 
 use crate::input::Keymap;
-use crate::layout::Layout;
+use crate::layout::{LayoutName, LayoutSet};
 use crate::rules::Rules;
 use crate::shared::contracts::event::KeyPress;
 use crate::shared::contracts::event::Output;
@@ -34,10 +34,10 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use lutece::{Engine, Event, Layout, Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo};
+/// use lutece::{Engine, Event, LayoutName, Output, OutputId, Rect, StackSet, Tag, WinId, WindowInfo};
 ///
 /// let stacks = StackSet::new([Tag::try_new("1")?])?;
-/// let mut engine = Engine::new(stacks, Layout::default());
+/// let mut engine = Engine::new(stacks, LayoutName::default());
 ///
 /// let screen = Output { id: OutputId::new(0), rect: Rect::new(0, 0, 1000, 600)? };
 /// engine.handle(Event::OutputsChanged(vec![screen]));
@@ -49,6 +49,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Engine {
     stacks: StackSet,
+    /// The layouts a workspace can name. Configuration, like the keymap and the rules: it
+    /// is not in a snapshot, and a restore keeps the one of the engine it lands on.
+    layouts: LayoutSet,
     keymap: Keymap,
     rules: Rules,
     /// The outputs the backend reported, and the area each one covers; empty until the
@@ -81,12 +84,14 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Builds an engine with no outputs yet. Every workspace starts with `layout` and can
-    /// change it on its own afterwards.
+    /// Builds an engine with no outputs yet. Every workspace starts with the layout named
+    /// `layout` and can change it on its own afterwards. Only the fallback layout is
+    /// registered until [`with_layouts`](Self::with_layouts) gives the engine more.
     #[must_use]
-    pub fn new(stacks: StackSet, layout: Layout) -> Self {
+    pub fn new(stacks: StackSet, layout: LayoutName) -> Self {
         Self {
-            stacks: stacks.with_layout(layout),
+            stacks: stacks.with_layout(&layout),
+            layouts: LayoutSet::new(),
             keymap: Keymap::new(),
             rules: Rules::new(),
             outputs: Vec::new(),
@@ -100,6 +105,33 @@ impl Engine {
             focus_asks: focus_hook::Asks::new(),
             next_serial: 0,
         }
+    }
+
+    /// Gives the engine the layouts a workspace can name. A workspace that names a layout
+    /// the set does not have is arranged by the fallback until it switches to one that is.
+    #[must_use]
+    pub fn with_layouts(mut self, layouts: LayoutSet) -> Self {
+        self.layouts = layouts;
+        self
+    }
+
+    /// The layouts a workspace can name.
+    #[must_use]
+    pub fn layouts(&self) -> &LayoutSet {
+        &self.layouts
+    }
+
+    /// The layouts that workspaces name and the engine does not have, so the fallback
+    /// arranges them: each workspace's tag with the name it holds. The external layout is
+    /// not a missing one. A restore or a replay lists these when the set it runs with is
+    /// not the one the state was made with.
+    #[must_use]
+    pub fn missing_layouts(&self) -> Vec<(&crate::Tag, &LayoutName)> {
+        self.stacks
+            .workspaces()
+            .map(|workspace| (workspace.tag(), workspace.layout()))
+            .filter(|(_, name)| !name.is_external() && self.layouts.get(name).is_none())
+            .collect()
     }
 
     /// Offers every new window to a plugin: the engine asks with
@@ -149,9 +181,9 @@ impl Engine {
     /// # Examples
     ///
     /// ```
-    /// use lutece::{Engine, Keymap, Layout, StackSet, Tag};
+    /// use lutece::{Engine, Keymap, LayoutName, StackSet, Tag};
     ///
-    /// let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, Layout::default());
+    /// let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, LayoutName::default());
     /// assert_eq!(engine.grabs().count(), 0);
     /// engine.reconfigure(Keymap::new(), true);
     /// # Ok::<(), lutece::Error>(())

@@ -36,8 +36,8 @@
 //! ```
 
 use lutece::{
-    Action, Direction, Engine, KeyPress, Keymap, Keysym, Layout, ManageRule, Match, Modifiers,
-    Outcome, Rules, SpawnCommand, StackSet, Tag,
+    Action, Direction, Engine, KeyPress, Keymap, Keysym, ManageRule, Match, Modifiers, Outcome,
+    Rules, SpawnCommand, StackSet, Tag,
 };
 use lutece_x11::{Flow, X11Backend};
 
@@ -110,7 +110,9 @@ fn main() -> Result<()> {
     let tags = ('1'..='9')
         .map(|digit| Tag::try_new(digit.to_string()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut engine = Engine::new(StackSet::new(tags.clone())?, Layout::default())
+    let layouts = lutece_layouts::builtin();
+    let mut engine = Engine::new(StackSet::new(tags.clone())?, layouts.first())
+        .with_layouts(layouts)
         .with_keymap(keymap(&tags)?)
         .with_rules(rules(&tags)?)?;
     let mut backend = X11Backend::connect()?;

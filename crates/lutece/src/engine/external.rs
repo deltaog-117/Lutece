@@ -6,7 +6,6 @@
 //! so a replayed session ends in the same state.
 
 use super::Engine;
-use crate::layout::Layout;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::scene::Placement;
 use crate::shared::error::{Error, Result};
@@ -150,7 +149,7 @@ impl Engine {
         let wanted: Vec<(Tag, Key, Option<WinId>)> = self
             .stacks
             .screens()
-            .filter(|(_, workspace)| workspace.layout() == Layout::External)
+            .filter(|(_, workspace)| workspace.layout().is_external())
             .filter_map(|(output, workspace)| {
                 let area = self.work_area_of(output)?;
                 let windows: Vec<WinId> = workspace

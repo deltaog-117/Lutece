@@ -15,7 +15,7 @@ pub mod stack;
 
 pub use engine::Engine;
 pub use input::{Action, Direction, Keymap};
-pub use layout::{Layout, MasterRatio};
+pub use layout::{Columns, Layout, LayoutName, LayoutSet, MasterRatio};
 pub use rules::{ManageRule, Match, Outcome, Rules};
 pub use shared::contracts::effect::{Effect, SpawnCommand};
 pub use shared::contracts::event::{

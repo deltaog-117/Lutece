@@ -1,0 +1,15 @@
+[package]
+name = "lutece-layouts"
+description = "The built-in layouts of lutece: tile, monocle, grid and centered master"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lutece = { path = "../lutece" }
+
+[dev-dependencies]
+proptest = "1"

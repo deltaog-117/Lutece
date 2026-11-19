@@ -3,7 +3,7 @@
 
 use super::workspace::Workspace;
 use crate::float::Float;
-use crate::layout::Layout;
+use crate::layout::{LayoutName, LayoutSet};
 use crate::shared::error::{Error, Result};
 use crate::shared::ids::{OutputId, Tag, WinId};
 use std::collections::HashSet;
@@ -63,7 +63,7 @@ impl StackSet {
             if !seen.insert(tag.clone()) {
                 return Err(Error::DuplicateTag(tag));
             }
-            workspaces.push(Workspace::empty(tag, Layout::default(), rank));
+            workspaces.push(Workspace::empty(tag, LayoutName::default(), rank));
         }
         let mut workspaces = workspaces.into_iter();
         let first = workspaces.next().ok_or(Error::NoWorkspaces)?;
@@ -79,9 +79,9 @@ impl StackSet {
     }
 
     /// Gives every workspace `layout`.
-    pub(crate) fn with_layout(mut self, layout: Layout) -> Self {
+    pub(crate) fn with_layout(mut self, layout: &LayoutName) -> Self {
         self.workspaces_mut()
-            .for_each(|workspace| workspace.set_layout(layout));
+            .for_each(|workspace| workspace.set_layout(layout.clone()));
         self
     }
 
@@ -343,20 +343,21 @@ impl StackSet {
         self.current.workspace.swap_prev();
     }
 
-    /// Switches the current workspace to its next layout, wrapping around.
-    pub fn next_layout(&mut self) {
-        self.current.workspace.next_layout();
+    /// Switches the current workspace to the next layout of `layouts`, wrapping around.
+    pub fn next_layout(&mut self, layouts: &LayoutSet) {
+        self.current.workspace.next_layout(layouts);
     }
 
-    /// Switches the current workspace between the external layout and a tile layout.
-    pub fn toggle_external_layout(&mut self) {
-        self.current.workspace.toggle_external();
+    /// Switches the current workspace between the external layout and the first layout of
+    /// `layouts`.
+    pub fn toggle_external_layout(&mut self, layouts: &LayoutSet) {
+        self.current.workspace.toggle_external(layouts);
     }
 
-    /// Moves the current workspace's master ratio by `delta` thousandths, if its layout
-    /// has a master column.
-    pub fn resize_master(&mut self, delta: i16) {
-        self.current.workspace.resize_master(delta);
+    /// Moves the current workspace's master ratio by `delta` thousandths, if its layout in
+    /// `layouts` has a master column.
+    pub fn resize_master(&mut self, delta: i16, layouts: &LayoutSet) {
+        self.current.workspace.resize_master(delta, layouts);
     }
 
     /// Makes the workspace with this tag current. If another screen shows it, that screen

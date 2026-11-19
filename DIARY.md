@@ -1780,3 +1780,19 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-19 | Initial entry | deltaog-117 |
+
+### 2026-11-19 – Layouts behind a trait
+
+- **Scope:** the core's half of window-manager's "layouts as crates"; the reasoning, the two COAs and the choice (**B**) are in that repository's diary.
+- **Shape:** `Layout` is `Debug + Send + Sync` with one required method and one defaulted; a layout is a pure function of its arguments, as the old enum's methods were. The workspace holds a `LayoutName` and a `MasterRatio`, so it stays `Clone + Eq` with no code in it; the engine holds the `LayoutSet`. `Engine` still derives `Eq`: two sets are equal when they list the same names in order, since a layout is identified by its name and the state cannot depend on code.
+- **Choices:** the fallback is separate from the registered layouts and takes part in the cycle only when it is the only one, so registering the four built-ins gives the cycle of before. `register` refuses `columns` and `external` and a repeat, in one error, because all three mean "this name is not yours". A name the set lacks falls back instead of failing, so reading a snapshot or log under other layouts cannot stop the screen; `missing_layouts` is how a host finds out.
+- **Dev-dependency cycle:** `lutece-layouts` depends on `lutece`, and `lutece`'s integration tests and the backends' tests depend on `lutece-layouts`. That is allowed for tests that live outside the crate; the unit tests inside `lutece` cannot use it (they would see two copies of the crate), so they use a layout of their own.
+- **Snapshot:** version 3. `LayoutState` and `tile_ratio` are replaced by a name and one ratio. The layout set is not saved, like the keymap.
+- **Tests:** property tests for the name, the set and the fallback; six engine tests (a layout from another crate, the cycle, an unknown name, the external layout, a snapshot's name and ratio, a bad name refused). The layout algorithms and their property tests moved with the code.
+- **Not done:** no example crate that adds a layout (the doc test on `Layout` is the model); nothing was seen on a screen, since the algorithms are the same code.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-19 | Initial entry | deltaog-117 |

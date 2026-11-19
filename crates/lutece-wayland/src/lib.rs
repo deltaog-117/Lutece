@@ -4,11 +4,11 @@
 //! run a loop of its own. A window manager binds it and repeats three steps:
 //!
 //! ```no_run
-//! use lutece::{Engine, Event, Layout, Size, StackSet, Tag};
+//! use lutece::{Engine, Event, LayoutName, Size, StackSet, Tag};
 //! use lutece_wayland::{Flow, WaylandBackend};
 //! use std::time::Duration;
 //!
-//! let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, Layout::default());
+//! let mut engine = Engine::new(StackSet::new([Tag::try_new("1")?])?, LayoutName::default());
 //! let mut backend = WaylandBackend::bind(Size::new(1280, 800)?)?;
 //! backend.grab_keys(engine.grabs());
 //!

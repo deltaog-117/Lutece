@@ -1,10 +1,10 @@
 //! Cutting a length into equal parts, shared by the layouts that build rows and columns.
 
-use crate::shared::error::{Error, Result};
-use crate::shared::geometry::Rect;
+use lutece::Rect;
+use lutece::{Error, Result};
 
 /// Narrows a computed coordinate; it only fails when `area` reaches past `i32::MAX`.
-pub(super) fn coordinate(value: i64, area: Rect) -> Result<i32> {
+pub(crate) fn coordinate(value: i64, area: Rect) -> Result<i32> {
     i32::try_from(value).map_err(|_| Error::AreaOutOfRange(area))
 }
 
@@ -13,7 +13,7 @@ pub(super) fn coordinate(value: i64, area: Rect) -> Result<i32> {
 ///
 /// Each run is `(start, length)`. The caller guarantees `parts` is at least 1 and no more
 /// than `total`, so no run is empty.
-pub(super) fn split(start: i32, total: u32, parts: u32, area: Rect) -> Result<Vec<(i32, u32)>> {
+pub(crate) fn split(start: i32, total: u32, parts: u32, area: Rect) -> Result<Vec<(i32, u32)>> {
     let (base, extra) = (total / parts, total % parts);
     let mut at = i64::from(start);
     (0..parts)

@@ -1038,9 +1038,18 @@ name = "lutece"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "lutece-layouts",
  "proptest",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lutece-layouts"
+version = "0.1.0"
+dependencies = [
+ "lutece",
+ "proptest",
 ]
 
 [[package]]
@@ -1049,6 +1058,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "lutece",
+ "lutece-layouts",
  "proptest",
  "rustix 1.1.5",
  "smithay",
@@ -1065,6 +1075,7 @@ name = "lutece-x11"
 version = "0.1.0"
 dependencies = [
  "lutece",
+ "lutece-layouts",
  "proptest",
  "rustix 1.1.5",
  "thiserror 2.0.21",

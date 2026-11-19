@@ -67,6 +67,14 @@ pub enum Error {
     /// No workspace holds this window.
     #[error("window {0:?} is not managed")]
     UnknownWindow(WinId),
+    /// A layout name is a lowercase letter, then lowercase letters, digits and hyphens.
+    #[error(
+        "a layout name is a lowercase letter then lowercase letters, digits and hyphens, 32 at most"
+    )]
+    InvalidLayoutName,
+    /// Two layouts cannot share a name, and two names belong to the engine.
+    #[error("a layout named {0:?} is already registered or reserved")]
+    LayoutNameTaken(String),
     /// A master ratio must leave room for both the master and the rest.
     #[error("master ratio must be 1..=999 per mille, got {0}")]
     InvalidRatio(u16),

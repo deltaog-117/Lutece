@@ -36,7 +36,7 @@ impl Kernel for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::Layout;
+    use crate::layout::LayoutName;
     use crate::shared::contracts::event::{Output, WindowInfo};
     use crate::shared::geometry::Rect;
     use crate::shared::ids::{OutputId, Tag, WinId};
@@ -45,7 +45,10 @@ mod tests {
 
     fn fresh() -> Engine {
         let tags = ["1", "2"].map(|name| Tag::try_new(name).expect("has text"));
-        let mut engine = Engine::new(StackSet::new(tags).expect("distinct"), Layout::default());
+        let mut engine = Engine::new(
+            StackSet::new(tags).expect("distinct"),
+            LayoutName::default(),
+        );
         engine.handle(Event::OutputsChanged(vec![Output {
             id: OutputId::new(0),
             rect: Rect::new(0, 0, 1000, 600).expect("a rectangle"),

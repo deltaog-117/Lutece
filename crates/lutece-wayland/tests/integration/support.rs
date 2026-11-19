@@ -3,7 +3,7 @@
 //! Both sides run on the test thread. Neither blocks: each pass lets the backend serve
 //! its clients, then lets the client read what the backend sent.
 
-use lutece::{Engine, Event, Layout, Size, StackSet, Tag, WinId};
+use lutece::{Engine, Event, Size, StackSet, Tag, WinId};
 use lutece_wayland::WaylandBackend;
 use std::io::Write;
 use std::os::fd::AsFd;
@@ -1197,7 +1197,7 @@ impl Dispatch<WpFractionalScaleV1, usize> for Observed {
 /// An engine with one workspace.
 pub fn engine() -> Engine {
     let stacks = StackSet::new([Tag::try_new("1").expect("a valid tag")]).expect("one workspace");
-    Engine::new(stacks, Layout::default())
+    Engine::new(stacks, lutece_layouts::builtin().first()).with_layouts(lutece_layouts::builtin())
 }
 
 /// Runs events through the engine and applies the resulting effects and scene. Returns

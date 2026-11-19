@@ -5,7 +5,7 @@
 //! windows; the test acts as the clients.
 
 use crate::support::Session;
-use lutece::{Engine, Event, Layout, StackSet, Tag, WinId};
+use lutece::{Engine, Event, StackSet, Tag, WinId};
 use lutece_x11::X11Backend;
 use std::time::{Duration, Instant};
 use x11rb::protocol::xproto::Window;
@@ -24,7 +24,11 @@ impl Rig {
         let tags = ["1"].map(|name| Tag::try_new(name).expect("has text"));
         Self {
             backend: X11Backend::connect_to(Some(session.display())).expect("takes over"),
-            engine: Engine::new(StackSet::new(tags).expect("distinct"), Layout::default()),
+            engine: Engine::new(
+                StackSet::new(tags).expect("distinct"),
+                lutece_layouts::builtin().first(),
+            )
+            .with_layouts(lutece_layouts::builtin()),
             seen: Vec::new(),
         }
     }

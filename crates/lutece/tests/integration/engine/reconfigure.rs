@@ -1,8 +1,8 @@
 //! Changing the keys and the manage hook of an engine that has windows.
 
 use lutece::{
-    Action, Effect, Engine, Event, KeyPress, Keymap, Keysym, Layout, Modifiers, Output, OutputId,
-    Rect, StackSet, Tag, WinId, WindowInfo,
+    Action, Effect, Engine, Event, KeyPress, Keymap, Keysym, Modifiers, Output, OutputId, Rect,
+    StackSet, Tag, WinId, WindowInfo,
 };
 use proptest::prelude::*;
 
@@ -10,8 +10,9 @@ fn engine() -> Engine {
     let tags = ["1", "2"].map(|name| Tag::try_new(name).expect("test tags have text"));
     let mut engine = Engine::new(
         StackSet::new(tags).expect("distinct tags"),
-        Layout::default(),
-    );
+        lutece_layouts::builtin().first(),
+    )
+    .with_layouts(lutece_layouts::builtin());
     let rect = Rect::new(0, 0, 1000, 600).expect("non-zero size");
     engine.handle(Event::OutputsChanged(vec![Output {
         id: OutputId::new(0),
