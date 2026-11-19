@@ -51,10 +51,14 @@ impl Engine {
             }
             Event::WindowClosed(id) => {
                 self.manage_pending.retain(|_, (window, _)| *window != id);
+                let owner = self.focus_owner(id);
                 // Already gone: nothing left to remove.
                 let _ = self.stacks.remove(id);
                 self.styles.remove(&id);
                 self.properties.remove(&PropertyTarget::Window(id));
+                if let Some(tag) = owner {
+                    self.ask_focus(tag, id, &mut effects);
+                }
             }
             Event::FocusRequested(id) | Event::PointerEntered(id) => {
                 // Not managed (never opened, or just closed): nothing to focus.
@@ -98,6 +102,7 @@ impl Engine {
             Event::LayoutProvided { serial, placements } => {
                 self.provide_layout(serial, placements);
             }
+            Event::FocusDecided { serial, id } => self.decide_focus(serial, id),
             Event::OutputsChanged(outputs) => {
                 let ids: Vec<_> = outputs.iter().map(|output| output.id).collect();
                 self.stacks.set_outputs(&ids);

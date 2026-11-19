@@ -2,6 +2,7 @@
 
 use super::Engine;
 use super::external::{self, Slot, Slots};
+use super::focus_hook::{Ask, Asks};
 use crate::shared::contracts::event::{Output, PropertyTarget, WindowInfo};
 use crate::shared::contracts::style::{Curve, Glide, Rgba, Style, Transition};
 use crate::shared::error::{Error, Result};
@@ -9,8 +10,8 @@ use crate::shared::geometry::Insets;
 use crate::shared::ids::{OutputId, Tag, WinId};
 use crate::shared::names::{MAX_PROPERTIES_PER_TARGET, PropertyKey, PropertyValue};
 use crate::snapshot::{
-    ColorState, CurveState, OutputState, PendingState, PropertiesState, PropertyEntry,
-    ReservedState, Snapshot, StyleEntry, StyleState, TargetState, VERSION,
+    ColorState, CurveState, FocusAskState, OutputState, PendingState, PropertiesState,
+    PropertyEntry, ReservedState, Snapshot, StyleEntry, StyleState, TargetState, VERSION,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -173,6 +174,16 @@ impl Engine {
                     transient_for: info.transient_for.map(WinId::get),
                 })
                 .collect(),
+            focus_asks: self
+                .focus_asks
+                .iter()
+                .map(|(tag, ask)| FocusAskState {
+                    tag: tag.as_str().to_owned(),
+                    serial: ask.serial,
+                    closed: ask.closed.get(),
+                    focus: ask.focus.get(),
+                })
+                .collect(),
             next_serial: self.next_serial,
         }
     }
@@ -328,6 +339,24 @@ impl Engine {
             }
         }
 
+        let mut focus_asks = Asks::new();
+        for state in &snapshot.focus_asks {
+            let tag = Tag::try_new(state.tag.as_str()).map_err(refused)?;
+            if !tags.contains(&tag) {
+                return Err(refused(format!(
+                    "a focus request for {tag}, which is not a workspace"
+                )));
+            }
+            let ask = Ask {
+                serial: state.serial,
+                closed: WinId::new(state.closed),
+                focus: WinId::new(state.focus),
+            };
+            if focus_asks.insert(tag.clone(), ask).is_some() {
+                return Err(refused(format!("{tag} has two focus requests")));
+            }
+        }
+
         Ok(Self {
             stacks,
             keymap: template.keymap.clone(),
@@ -339,6 +368,8 @@ impl Engine {
             external,
             manage_hook: template.manage_hook,
             manage_pending,
+            focus_hook: template.focus_hook,
+            focus_asks,
             next_serial: snapshot.next_serial,
         })
     }

@@ -25,6 +25,7 @@ fn template() -> Engine {
     Engine::new(stacks, Layout::default())
         .with_keymap(keymap())
         .with_manage_hook(true)
+        .with_focus_hook(true)
 }
 
 fn property_event() -> impl Strategy<Value = Event> {
@@ -55,6 +56,10 @@ fn hook_event() -> impl Strategy<Value = Event> {
         (0u64..6).prop_map(|serial| Event::LayoutProvided {
             serial,
             placements: Vec::new(),
+        }),
+        (0u64..6, 0u64..8).prop_map(|(serial, id)| Event::FocusDecided {
+            serial,
+            id: WinId::new(id),
         }),
     ]
 }

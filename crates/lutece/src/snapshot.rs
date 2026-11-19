@@ -8,7 +8,7 @@
 //! damaged or invented snapshot is refused and can never become an engine that breaks the
 //! rules the core keeps.
 //!
-//! What the configuration decides (the keys, the rules, whether the manage hook is on, the
+//! What the configuration decides (the keys, the rules, whether the manage and focus hooks are on, the
 //! workspace names and their order) is not in a snapshot: it is taken from the engine the
 //! snapshot is restored onto, so a snapshot cannot change the configuration.
 //!
@@ -19,7 +19,7 @@
 
 /// The layout of the snapshot, raised when a field changes meaning or is added. A snapshot
 /// with another version is refused, not guessed at.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// What an engine knows about the session at one moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +46,8 @@ pub struct Snapshot {
     pub external: Vec<SlotState>,
     /// The manage requests nobody has answered.
     pub manage_pending: Vec<PendingState>,
+    /// The focus requests nobody has answered, one per workspace, by tag.
+    pub focus_asks: Vec<FocusAskState>,
     /// The serial of the next layout request.
     pub next_serial: u64,
 }
@@ -340,4 +342,18 @@ pub struct PendingState {
     pub class: String,
     /// The window it is a dialog for, if any.
     pub transient_for: Option<u64>,
+}
+
+/// A focus request nobody has answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FocusAskState {
+    /// The workspace.
+    pub tag: String,
+    /// Its serial.
+    pub serial: u64,
+    /// The window that closed.
+    pub closed: u64,
+    /// The window the engine focused, which an answer is used only while it still has.
+    pub focus: u64,
 }

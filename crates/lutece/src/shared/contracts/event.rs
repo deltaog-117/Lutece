@@ -126,6 +126,18 @@ pub enum Event {
         /// The windows and their rectangles.
         placements: Vec<Placement>,
     },
+    /// The answer to an [`Effect::FocusDecisionRequested`](crate::Effect::FocusDecisionRequested):
+    /// the window of that workspace that should have the focus now that the focused one is
+    /// gone. The engine already gave the focus to its own choice, so an answer moves it. It is
+    /// used only if `serial` is still outstanding, the workspace still has the focus where the
+    /// engine put it (nobody changed it meanwhile) and `id` is a window of that workspace;
+    /// any other answer is ignored, and none costs nothing.
+    FocusDecided {
+        /// The request being answered.
+        serial: u64,
+        /// The window to focus.
+        id: WinId,
+    },
 }
 
 /// What a property belongs to.

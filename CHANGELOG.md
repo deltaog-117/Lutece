@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The focus hook: `Engine::with_focus_hook` and `Engine::set_focus_hook`, `Effect::FocusDecisionRequested`, `Event::FocusDecided` and `Engine::pending_focus_requests`. When the window that has the focus of its workspace closes and two windows or more are left, the engine focuses its own choice as before and asks (`serial`, `tag`, the `closed` window, the workspace's `windows` and the `focus` it chose); the answer moves the focus only while the serial is the open one, the workspace still has the focus on the window the engine chose and the answer names a window of that workspace, and never changes which workspace a screen shows. One question is open per workspace at most, a newer close replaces it, and `pending_focus_requests` gives the open ones, oldest first, to a plugin that connects late. The engine never waits. Off by default.
+- `snapshot::FocusAskState` and the field `Snapshot::focus_asks`: the open focus requests, so a restored engine equals the one that was saved.
 - `Kernel::NAME`: what a kernel is called, for a file that stores its state, since two kernels may share a state version. The engine's is `workspaces`. Required, so a kernel written outside this repository must add it.
 - `Engine::area_of`, `Engine::work_area_of` and `Engine::style_of`, read-only, for a kernel that builds its own scene (they were private).
 - lutece-wayland: a user's window shader. `check_effect`, `window_effect_source`, `EffectError` and `MAX_EFFECT_BYTES`; `NestedBackend::set_window_effect` and `DrmBackend::set_window_effect` draw every window through `vec4 effect(vec4 color, vec2 uv, vec2 size, float progress)`, where `progress` is the style glide's eased progress (1 at rest). The window shader has two marker comments for it and is otherwise as it was. A file that breaks a rule or does not compile leaves the effect in use.
@@ -150,6 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lutece-wayland`: the stacking order of X11 windows under Xwayland follows the scene (`_NET_CLIENT_LIST_STACKING`), a fullscreen window above the others; it is redone when the order or a fullscreen state changes
 
 ### Changed
+- `snapshot::VERSION` is 2, since `Snapshot` has the new field `focus_asks`. A snapshot of version 1 is refused, not guessed at.
 - `DrmBackend` draws each screen on its own and keeps a pending page flip for each, so a screen that is slow or switched off does not hold the others back; `describe` lists every screen, left to right. With one monitor nothing differs.
 - The pointer is kept on the screens, not on the box around them: a place no screen covers (monitors of different heights) is moved to the nearest screen. Absolute devices are clamped the same way.
 - The Wayland backend reports the pointer entering a window as `Event::PointerEntered`, not `Event::FocusRequested`. The core focuses the window for both, so the screen behaves the same; a host that matched on `FocusRequested` to see the pointer must now match on the new event. The X11 backend still sends `FocusRequested` for it.

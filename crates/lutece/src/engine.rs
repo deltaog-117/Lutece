@@ -5,6 +5,7 @@
 //! cannot drift from what the engine knows.
 
 mod external;
+mod focus_hook;
 mod handle;
 mod kernel;
 mod scene_builder;
@@ -70,6 +71,10 @@ pub struct Engine {
     /// The manage requests nobody has answered, by serial.
     manage_pending:
         std::collections::BTreeMap<u64, (WinId, crate::shared::contracts::event::WindowInfo)>,
+    /// Whether a window that closes with the focus is offered to the focus hook.
+    focus_hook: bool,
+    /// The focus requests nobody has answered, one per workspace.
+    focus_asks: focus_hook::Asks,
     /// The serial of the next layout request. Part of the state, so a replay numbers its
     /// requests the same way.
     next_serial: u64,
@@ -91,6 +96,8 @@ impl Engine {
             manage_hook: false,
             manage_pending: std::collections::BTreeMap::new(),
             external: external::Slots::new(),
+            focus_hook: false,
+            focus_asks: focus_hook::Asks::new(),
             next_serial: 0,
         }
     }
@@ -103,6 +110,24 @@ impl Engine {
     pub fn with_manage_hook(mut self, on: bool) -> Self {
         self.manage_hook = on;
         self
+    }
+
+    /// Offers the closing of a focused window to a plugin: when the window that has the focus
+    /// of its workspace closes, and the workspace keeps two windows or more, the engine gives
+    /// the focus to the next window as usual and asks with
+    /// [`Effect::FocusDecisionRequested`](crate::Effect::FocusDecisionRequested); the answer
+    /// [`Event::FocusDecided`](crate::Event::FocusDecided) moves the focus if nothing else
+    /// has. The engine does not wait.
+    #[must_use]
+    pub fn with_focus_hook(mut self, on: bool) -> Self {
+        self.focus_hook = on;
+        self
+    }
+
+    /// Turns the focus hook on or off in a running engine, as a reload does. Requests it has
+    /// not been answered for stay open and can still be answered.
+    pub fn set_focus_hook(&mut self, on: bool) {
+        self.focus_hook = on;
     }
 
     /// Uses `keymap` for key presses. Without one, key presses do nothing.

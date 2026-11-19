@@ -315,6 +315,14 @@ impl StackSet {
         Ok(())
     }
 
+    /// Focuses `id` on the workspace `tag` and reports whether it is a window of that
+    /// workspace. No screen changes what it shows, so a workspace that is hidden or on
+    /// another screen keeps its place.
+    pub(crate) fn focus_in(&mut self, tag: &Tag, id: WinId) -> bool {
+        self.workspace_mut(tag)
+            .is_ok_and(|workspace| workspace.focus_on(id))
+    }
+
     /// Focuses the next window on the current workspace, wrapping around.
     pub fn focus_next(&mut self) {
         self.current.workspace.focus_next();

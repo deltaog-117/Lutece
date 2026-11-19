@@ -56,6 +56,24 @@ pub enum Effect {
         /// Names this request in the answer.
         serial: u64,
     },
+    /// Ask whatever provides the focus hook which window of the workspace `tag` should have
+    /// the focus now that `closed`, which had it, is gone. The engine already gave the focus
+    /// to `focus`, its own choice, so the screen never waits. The answer is
+    /// [`Event::FocusDecided`](crate::Event::FocusDecided) with the same `serial`; it is used
+    /// only while the workspace still has the focus on `focus`, and none is needed. Asked
+    /// only when the workspace still has two windows or more.
+    FocusDecisionRequested {
+        /// Names this request in the answer.
+        serial: u64,
+        /// The workspace.
+        tag: Tag,
+        /// The window that closed.
+        closed: WinId,
+        /// The windows of the workspace now, in reading order, floating ones included.
+        windows: Vec<WinId>,
+        /// The window that has the focus now, by the engine's own rule.
+        focus: WinId,
+    },
 }
 
 /// A program and its arguments. The program name is never empty.

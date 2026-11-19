@@ -1765,3 +1765,18 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-14 | Initial entry | deltaog-117 |
+
+### 2026-11-19 – A focus hook
+
+- **Scope:** the core's half of window-manager's focus hook; the reasoning, the three COAs and the choice (**C**, a logged question and answer with a fallback) are in that repository's diary.
+- **Shape:** the same as the manage hook, with one difference: the engine does the usual thing first (the next window takes the focus, or the previous one at the end) and asks afterwards, so the screen never waits and the plugin only ever corrects. The answer is used only if three things hold, all read from state: the serial is the open one, the workspace's focus is still on the window the engine chose, and the named window is in that workspace. A late answer therefore cannot undo a focus the user or another event moved, and replay needs nothing but the logged answer.
+- **Choices:** the question is kept per workspace (a `BTreeMap` by tag), not per window, so a plugin that never answers leaves at most one per workspace and the snapshot stays small and ordered; a newer close replaces the older question. The windows are not stored with it: a late plugin is given the workspace's windows as they are then, never a list with a dead window in it. The answer focuses inside its workspace (`StackSet::focus_in`) and does not go through `focus_window`, which would switch a screen to that workspace; a close on a hidden workspace must not drag the user there. A workspace with fewer than two windows left asks nothing.
+- **Snapshot:** `focus_asks` is new, so `snapshot::VERSION` is 2. The hook flag is not stored, like the manage flag; it comes from the engine a snapshot is restored onto.
+- **Tests:** ten for the hook and two property tests (an answer never changes the shown workspace nor puts a focus outside its workspace; equal events give equal engines; no more questions stay open than there are workspaces). The snapshot property test now has the hook on and draws answers. A first version of one test closed a window that did not have the focus and so asked nothing; the engine was right and the test was wrong.
+- **Not done:** it covers the close of the focused window. A window moved to another workspace (`MoveToTag`, `SendToNextOutput`) also gives a focus by the engine's rule and is not asked about. Not seen on a screen.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-19 | Initial entry | deltaog-117 |
