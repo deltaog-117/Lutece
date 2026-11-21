@@ -240,6 +240,14 @@ impl WaylandBackend {
         self.state.workspaces.set(&handle, workspaces.to_vec());
     }
 
+    /// Sets the decorations programs gave windows, replacing every look given before: a
+    /// window in `looks` is drawn from its list in place of its style's title bar, and every
+    /// other window from its style. Only drawn; no client is told.
+    pub fn set_looks(&mut self, looks: Vec<(lutece::WinId, crate::WindowLook)>) {
+        self.state.windows.set_looks(looks);
+        self.state.damaged = true;
+    }
+
     /// Makes `outputs` the complete set of outputs. One whose id is new appears to
     /// clients, one whose id is missing disappears (its windows are the core's to move),
     /// and one that stays takes the new area. The core hears of the new set on the next
@@ -326,7 +334,7 @@ impl WaylandBackend {
     /// [`clear_damage`](Self::clear_damage), or a window is still gliding at `now`.
     #[cfg(feature = "drm")]
     pub(crate) fn needs_frame(&self, now: Instant) -> bool {
-        self.state.damaged || self.state.windows.animating(now)
+        self.state.damaged || self.state.windows.animating(now) || self.state.ghosts.animating(now)
     }
 
     /// Notes that a frame was drawn, so the next one waits for a change.
@@ -442,7 +450,7 @@ impl WaylandBackend {
     /// What to draw for the managed windows, front to back, on the screen `view` describes:
     /// the part of the compositor's space that starts at `view.origin`, at `view.scale`.
     pub(crate) fn surface_elements(
-        &self,
+        &mut self,
         renderer: &mut GlesRenderer,
         shaders: &crate::look::Shaders,
         titles: &mut crate::title::TitleCache,
@@ -450,15 +458,30 @@ impl WaylandBackend {
         flipped: bool,
         view: View,
     ) -> Vec<SceneElement> {
-        let layers: Vec<_> = self
-            .state
-            .layers()
+        let space = self.state.layers();
+        let layers: Vec<_> = space
             .iter()
             .map(|layer| layer.shifted(view.origin))
             .collect();
-        crate::render::surface_elements(
+        let now = std::time::Instant::now();
+        self.state.ghosts.prune(now);
+        let mut elements = crate::render::ghost_elements(
+            self.state.ghosts.running(),
+            now,
+            renderer,
+            shaders,
+            titles,
+            frame,
+            flipped,
+            view,
+        );
+        elements.extend(crate::render::surface_elements(
             &layers, renderer, view.scale, shaders, titles, frame, flipped,
-        )
+        ));
+        // After the windows were drawn, so each has its texture imported; before the next
+        // frame, so a window destroyed meanwhile has a picture to leave behind.
+        self.state.ghosts.capture(&space, renderer);
+        elements
     }
 
     /// What to draw for a cursor image a client supplied, if it did, on the screen `view`

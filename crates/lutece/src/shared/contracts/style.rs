@@ -134,9 +134,12 @@ impl Glide {
     /// back in, instead of vanishing and popping up. A window that has never been shown does
     /// not slide: it is new, not returning.
     pub const SLIDES: Self = Self(1 << 4);
+    /// A window that closes does not vanish: its last picture fades and shrinks away for the
+    /// length of the transition, drawn by the backend after the window itself is gone.
+    pub const CLOSES: Self = Self(1 << 5);
 
     /// Every kind this version knows.
-    const KNOWN: u8 = 0b1_1111;
+    const KNOWN: u8 = 0b11_1111;
 
     /// This set with the kinds of `other` added.
     #[must_use]
@@ -345,10 +348,11 @@ mod tests {
             .with(Glide::OPACITY)
             .with(Glide::RADIUS)
             .with(Glide::APPEARS)
-            .with(Glide::SLIDES);
+            .with(Glide::SLIDES)
+            .with(Glide::CLOSES);
         assert_eq!(Glide::from_bits(all.bits()), all);
-        assert_eq!(Glide::from_bits(0b1110_0000), Glide::NONE);
-        assert_eq!(Glide::from_bits(0b1110_0010), Glide::OPACITY);
+        assert_eq!(Glide::from_bits(0b1100_0000), Glide::NONE);
+        assert_eq!(Glide::from_bits(0b1100_0010), Glide::OPACITY);
     }
 
     #[test]

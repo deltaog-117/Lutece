@@ -1865,3 +1865,17 @@ Animation:
 - **Why a global:** it breaks no effect file written before, as `tex` does not; the window-manager diary has the reasoning.
 - **Tests:** the table, the pick order, a property that the progress is always 0 to 1 (a NaN reads as rest), and a shader that reads `transition` validated with `glslangValidator`.
 - **Not seen on a screen.**
+
+### 2026-11-21 – The close animation
+
+- **Scope:** `Glide::CLOSES`, `ghost.rs`, and `render.rs` split so a live window and a ghost share the drawing. The window-manager diary has the reasoning and the choices.
+- **Shape:** after each frame `Ghosts::capture` clones the root surface's texture and the window's `Look` for windows whose style closes; `State::start_ghost` turns the snapshot into a ghost when the toplevel or X11 window is destroyed; `surface_elements` in the backend prunes finished ghosts and draws the rest in front of the windows. `Timing`, `shrunk` and `faded` are pure and have property tests. `Phase::Close` is one more row of the phase table.
+- **Not unit-tested:** capture and draw need a display and a GPU. Not seen on a screen.
+
+### 2026-11-21 – Primitives for a window's look
+
+- **Scope:** `primitives.rs` (`WindowLook`, `Primitive`, `Area`, `TextSource`, `title_bar`) and the render path that draws them; the built-in title bar goes through it. `Look` carries an optional shared list, `Entry::plugin_look` holds it, `set_looks` replaces every list.
+- **Why bounded:** `WindowLook::try_new` is the only constructor and refuses what would make a frame expensive, so a program that sets a look cannot.
+- **Tests:** the area geometry, the limits and the built-in bar's place, as property tests.
+- **Not seen on a screen.**
+

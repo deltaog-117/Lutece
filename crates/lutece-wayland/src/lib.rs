@@ -33,6 +33,7 @@ mod effect;
 mod error;
 mod focus;
 mod foreign;
+mod ghost;
 mod glide;
 mod input;
 mod layers;
@@ -42,6 +43,7 @@ mod outline;
 mod pointer;
 mod popup;
 mod presence;
+mod primitives;
 mod render;
 mod scale;
 mod selection;
@@ -65,6 +67,9 @@ pub use effect::{EffectError, MAX_EFFECT_BYTES, check_effect, window_effect_sour
 pub use error::{Error, Result};
 pub use nested::NestedBackend;
 pub use outline::Outline;
+pub use primitives::{
+    Area, LookError, MAX_EXTENT, MAX_PRIMITIVES, MAX_TEXT_BYTES, Primitive, TextSource, WindowLook,
+};
 pub use scale::Scale;
 pub use settings::{InputSettings, SettingsError};
 pub use workspaces::WorkspaceInfo;

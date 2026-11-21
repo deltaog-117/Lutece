@@ -297,6 +297,9 @@ impl State {
 
     /// Forgets an X11 window that went away, telling the core if it knew it.
     fn forget_x11(&mut self, window: &X11Surface) {
+        if let Some(id) = self.windows.id_of_x11(window.window_id()) {
+            self.start_ghost(id);
+        }
         if let Some(id) = self.windows.remove_x11(window) {
             self.closed(id);
         }

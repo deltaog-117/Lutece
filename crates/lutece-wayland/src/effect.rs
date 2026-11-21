@@ -18,7 +18,8 @@
 //! neighbouring pixels. So can `transition`, an `int` that says which kind of change the
 //! window is in, compared with `TRANSITION_GLIDE` (it appears, or its opacity or radius
 //! changes, or it rests), `TRANSITION_SLIDE_IN` (it comes back with its workspace) and
-//! `TRANSITION_SLIDE_OUT` (it leaves with its workspace). It is a global and not an argument,
+//! `TRANSITION_SLIDE_OUT` (it leaves with its workspace) and `TRANSITION_CLOSE` (the window is
+//! gone and its last picture is on its way out; `progress` runs 0 to 1 over the close). It is a global and not an argument,
 //! so an effect written before it existed still builds. During a slide, `progress` is the
 //! eased progress of the slide. GLSL ES 1.00 has no recursion and only loops with a fixed count, so
 //! the cost per pixel is bounded by what is written; the size of the file is limited as well.
@@ -69,6 +70,8 @@ pub(crate) enum Phase {
     SlideIn,
     /// The window leaves with its workspace.
     SlideOut,
+    /// The window is closed and its last picture is on its way out.
+    Close,
 }
 
 impl Phase {
@@ -78,6 +81,7 @@ impl Phase {
             Self::Glide => 0,
             Self::SlideIn => 1,
             Self::SlideOut => 2,
+            Self::Close => 3,
         }
     }
 }
@@ -85,10 +89,11 @@ impl Phase {
 /// Every phase with the name of its macro in the shader. A phase added to [`Phase`] stops the
 /// match in [`Phase::code`] from compiling until it has a code; one left out of this table is
 /// caught by a test.
-const PHASES: [(&str, Phase); 3] = [
+const PHASES: [(&str, Phase); 4] = [
     ("TRANSITION_GLIDE", Phase::Glide),
     ("TRANSITION_SLIDE_IN", Phase::SlideIn),
     ("TRANSITION_SLIDE_OUT", Phase::SlideOut),
+    ("TRANSITION_CLOSE", Phase::Close),
 ];
 
 /// What a user's effect is told about the window it draws, besides the window itself.
@@ -335,7 +340,7 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), codes.len(), "codes are distinct");
-        for phase in [Phase::Glide, Phase::SlideIn, Phase::SlideOut] {
+        for phase in [Phase::Glide, Phase::SlideIn, Phase::SlideOut, Phase::Close] {
             assert!(
                 PHASES.iter().any(|(_, listed)| *listed == phase),
                 "{phase:?}"
@@ -343,6 +348,7 @@ mod tests {
         }
         let built = window_effect_source(IDENTITY).expect("allowed");
         assert!(built.contains("#define TRANSITION_SLIDE_OUT 2"));
+        assert!(built.contains("#define TRANSITION_CLOSE 3"));
         assert!(built.contains("uniform int transition;"));
     }
 

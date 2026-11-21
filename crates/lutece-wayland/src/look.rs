@@ -425,27 +425,6 @@ fn premultiply(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Where the title bar goes: right above `drawn` and its border, as wide as both, `height`
-/// tall.
-pub(crate) fn bar_area(
-    drawn: Rectangle<i32, Logical>,
-    border: i32,
-    height: i32,
-) -> Rectangle<i32, Logical> {
-    Rectangle::new(
-        (
-            drawn.loc.x.saturating_sub(border),
-            drawn.loc.y.saturating_sub(border).saturating_sub(height),
-        )
-            .into(),
-        (
-            drawn.size.w.saturating_add(border.saturating_mul(2)),
-            height,
-        )
-            .into(),
-    )
-}
-
 /// The corner radius of a title bar: the window's, but never more than half the bar's height,
 /// which would make it more than a half circle at each end.
 pub(crate) fn bar_radius(window_radius: f32, height: f32) -> f32 {
@@ -598,20 +577,6 @@ mod tests {
             prop_assert!(held.loc.x <= left && held.loc.y <= top);
             prop_assert!(held.loc.x + held.size.w >= right);
             prop_assert!(held.loc.y + held.size.h >= bottom);
-        }
-
-        /// The title bar sits directly above the bordered window and is as wide as it.
-        #[test]
-        fn the_bar_sits_above_the_bordered_window(
-            drawn in area(),
-            border in 0i32..40,
-            height in 1i32..120,
-        ) {
-            let bar = bar_area(drawn, border, height);
-            prop_assert_eq!(bar.loc.y + bar.size.h, drawn.loc.y - border);
-            prop_assert_eq!(bar.loc.x, drawn.loc.x - border);
-            prop_assert_eq!(bar.size.w, drawn.size.w + 2 * border);
-            prop_assert_eq!(bar.size.h, height);
         }
 
         /// A bar is never rounded past a half circle at its ends, and never by less than zero.

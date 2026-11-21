@@ -13,6 +13,7 @@
 use crate::animation::Animation;
 use crate::effect::EffectInput;
 use crate::glide::{StyleGlide, drawn_style};
+use crate::primitives::WindowLook;
 use crate::slide::Leaving;
 use lutece::{Rect, Style, WinId, WindowInfo};
 use smithay::desktop::PopupManager;
@@ -22,6 +23,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
 use smithay::xwayland::X11Surface;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The client behind a window: a Wayland toplevel, or an X11 window of Xwayland.
@@ -71,6 +73,9 @@ pub(crate) struct Entry {
     /// Whether the window was ever placed. A window that was not is new and does not slide
     /// in; one that was is coming back.
     pub(crate) shown_before: bool,
+    /// The decorations a program gave the window in place of the style's title bar, if it
+    /// gave any. Shared, so a snapshot of the window's look costs no copy of it.
+    pub(crate) plugin_look: Option<Arc<WindowLook>>,
 }
 
 impl Entry {
@@ -156,6 +161,7 @@ impl Layer {
 }
 
 /// The look of a placed window's surface.
+#[derive(Clone)]
 pub(crate) struct Look {
     pub(crate) style: Style,
     /// The rectangle the core gave the window, which its client sized itself to.
@@ -167,17 +173,20 @@ pub(crate) struct Look {
     pub(crate) title: String,
     /// How far the window's change is and which one it is. Only a user's effect reads it.
     pub(crate) effect: EffectInput,
+    /// The decorations a program gave the window; `None` draws the style's title bar.
+    pub(crate) primitives: Option<Arc<WindowLook>>,
 }
 
 impl Look {
     /// The same look with its rectangles moved by `-by`.
-    fn shifted(&self, by: Point<i32, Logical>) -> Self {
+    pub(crate) fn shifted(&self, by: Point<i32, Logical>) -> Self {
         Self {
             style: self.style,
             target: Rectangle::new(self.target.loc - by, self.target.size),
             drawn: Rectangle::new(self.drawn.loc - by, self.drawn.size),
             title: self.title.clone(),
             effect: self.effect,
+            primitives: self.primitives.clone(),
         }
     }
 }
@@ -221,6 +230,19 @@ impl Windows {
         })
     }
 
+    /// Gives each window in `looks` the decorations listed, and every other window none, so
+    /// the list is the whole set. A window that is not managed is ignored.
+    pub(crate) fn set_looks(&mut self, looks: Vec<(WinId, WindowLook)>) {
+        for entry in self.managed.values_mut() {
+            entry.plugin_look = None;
+        }
+        for (id, look) in looks {
+            if let Some(entry) = self.managed.get_mut(&id) {
+                entry.plugin_look = Some(Arc::new(look));
+            }
+        }
+    }
+
     /// Remembers a toplevel until its first commit.
     pub(crate) fn track(&mut self, toplevel: ToplevelSurface) {
         self.pending.push(toplevel);
@@ -253,6 +275,7 @@ impl Windows {
                 leaving: None,
                 sliding_in: false,
                 shown_before: false,
+                plugin_look: None,
             },
         );
         id
@@ -529,12 +552,18 @@ fn window_layers(id: WinId, entry: &Entry, target: Rect, title: &str, now: Insta
             style,
             target: placed_area(target),
             drawn: placed_area(rect),
-            title: if style.title_bar().height > 0 {
+            title: if style.title_bar().height > 0
+                || entry
+                    .plugin_look
+                    .as_ref()
+                    .is_some_and(|look| look.reads_title())
+            {
                 title.to_owned()
             } else {
                 String::new()
             },
             effect: entry.effect_input(now),
+            primitives: entry.plugin_look.clone(),
         }),
     });
     layers

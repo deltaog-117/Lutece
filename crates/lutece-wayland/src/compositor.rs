@@ -7,6 +7,7 @@
 use crate::dmabuf::Dmabufs;
 use crate::focus::Focus;
 use crate::foreign::{ForeignToplevels, Snapshot};
+use crate::ghost::Ghosts;
 use crate::pointer::PointerState;
 use crate::scale::Scale;
 use crate::settings::InputSettings;
@@ -14,7 +15,7 @@ use crate::translate;
 use crate::windows::Windows;
 use crate::workspaces::ExtWorkspaces;
 use crate::xwayland::StateReader;
-use lutece::{Event, Insets, KeyPress, Output as CoreOutput, OutputId, Rect, WinId, WindowInfo};
+use lutece::{Event, Glide, Insets, KeyPress, Output as CoreOutput, OutputId, Rect, WinId, WindowInfo};
 use smithay::backend::input::{KeyState, Keycode};
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::desktop::{PopupKind, PopupManager};
@@ -71,6 +72,9 @@ pub(crate) struct State {
     seat_state: SeatState<Self>,
     pub(crate) seat: Seat<Self>,
     pub(crate) windows: Windows,
+    /// The last pictures of windows that close with a transition, and the ghosts of those
+    /// that have closed.
+    pub(crate) ghosts: Ghosts,
     /// The area of each output, to keep popups on one.
     pub(crate) screens: Vec<Rect>,
     /// The same outputs as clients see them, to tell surfaces which they are on.
@@ -133,6 +137,21 @@ impl ClientData for ClientState {
 }
 
 impl State {
+    /// Keeps the last picture of window `id` as a ghost, if it is on screen and its style
+    /// closes with a transition. Called before the window is forgotten.
+    pub(crate) fn start_ghost(&mut self, id: WinId) {
+        let Some(entry) = self.windows.get(id) else {
+            return;
+        };
+        // A window that is hidden has no picture worth showing as it goes.
+        if entry.rect.is_none() || !entry.style.glide().contains(Glide::CLOSES) {
+            return;
+        }
+        self.ghosts
+            .start(id, entry.style.transition(), std::time::Instant::now());
+        self.damaged = true;
+    }
+
     /// Creates the protocol globals on `display`.
     pub(crate) fn new(
         display: &DisplayHandle,
@@ -163,6 +182,7 @@ impl State {
             seat_state,
             seat,
             windows: Windows::default(),
+            ghosts: Ghosts::default(),
             screens: Vec::new(),
             wl_outputs: Vec::new(),
             output_ids: Vec::new(),
@@ -381,6 +401,9 @@ impl XdgShellHandler for State {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = self.windows.id_of(surface.wl_surface()) {
+            self.start_ghost(id);
+        }
         if let Some(id) = self.windows.remove(&surface) {
             self.report_closed(id);
         }

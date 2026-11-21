@@ -1,18 +1,23 @@
 //! Drawing windows, their popups and the cursor, and telling clients when a frame was
 //! shown.
 
-use crate::look::{Shaders, Styled, bar_area, bar_radius, shadow_area};
+use crate::effect::{EffectInput, Phase};
+use crate::ghost::{Ghost, faded, shrunk};
+use crate::look::{Shaders, Styled, bar_radius, shadow_area};
+use crate::primitives::{Primitive, TextSource};
 use crate::scale::Scale;
 use crate::title::TitleCache;
 use crate::windows::{Layer, Look};
+use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
+use smithay::backend::renderer::element::texture::TextureRenderElement;
 use smithay::backend::renderer::element::utils::{CropRenderElement, RescaleRenderElement};
-use smithay::backend::renderer::element::{Kind, render_elements};
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::element::{Id as ElementId, Kind, RenderElement, render_elements};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::input::pointer::{CursorImageAttributes, CursorImageStatus};
 use smithay::utils::Scale as ElementScale;
 use smithay::utils::{IsAlive, Logical, Physical, Point, Rectangle, Size};
@@ -20,11 +25,16 @@ use smithay::wayland::compositor::{
     SurfaceAttributes, TraversalAction, with_states, with_surface_tree_downward,
 };
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// A window's surface as drawn: cut to its rectangle, scaled while it moves, and with its
 /// corners cut if its style asks for them.
 type WindowSurface =
     Styled<CropRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>>;
+
+/// A closed window's last picture as drawn while it goes: the same cut as a live window's.
+type GhostSurface =
+    Styled<CropRenderElement<RescaleRenderElement<TextureRenderElement<GlesTexture>>>>;
 
 render_elements! {
     /// One thing to draw: a surface as its client made it, a window's surface in its
@@ -33,6 +43,7 @@ render_elements! {
     pub(crate) SceneElement<=GlesRenderer>;
     Surface=WaylandSurfaceRenderElement<GlesRenderer>,
     Window=WindowSurface,
+    Ghost=GhostSurface,
     Border=PixelShaderElement,
     Picture=MemoryRenderBufferRenderElement<GlesRenderer>,
 }
@@ -114,6 +125,115 @@ fn window_elements(
     frame: Size<i32, Physical>,
     flipped: bool,
 ) -> Vec<SceneElement> {
+    let opacity = f32::from(look.style.opacity()) / f32::from(u8::MAX);
+    decorated(
+        look,
+        renderer,
+        scale,
+        shaders,
+        titles,
+        frame,
+        flipped,
+        |renderer, out| {
+            for element in render_elements_from_surface_tree(
+                renderer,
+                &layer.surface,
+                scale.point_to_physical(layer.origin),
+                scale.factor(),
+                opacity,
+                Kind::Unspecified,
+            ) {
+                out.extend(
+                    style_surface(element, look, scale, shaders, frame, flipped)
+                        .map(SceneElement::Window),
+                );
+            }
+        },
+    )
+}
+
+/// What to draw for the ghosts of closed windows, in front of everything else, on the screen
+/// `view` describes. Each is the window's last picture and its decorations, faded and shrunk
+/// by how far its close has gone.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ghost_elements(
+    ghosts: &[Ghost],
+    now: Instant,
+    renderer: &mut GlesRenderer,
+    shaders: &Shaders,
+    titles: &mut TitleCache,
+    frame: Size<i32, Physical>,
+    flipped: bool,
+    view: View,
+) -> Vec<SceneElement> {
+    let scale = view.scale;
+    // Newest first: elements run front to back.
+    ghosts
+        .iter()
+        .rev()
+        .flat_map(|ghost| {
+            let progress = ghost.timing.progress_at(now);
+            let snapshot = &ghost.snapshot;
+            let mut look = snapshot.look.shifted(view.origin);
+            look.style = look
+                .style
+                .with_opacity(faded(look.style.opacity(), progress));
+            look.drawn = shrunk(look.drawn, progress);
+            look.effect = EffectInput {
+                // Within 0 to 1 by the clamp in `progress_at`.
+                progress: progress as f32,
+                phase: Phase::Close,
+            };
+            let opacity = f32::from(look.style.opacity()) / f32::from(u8::MAX);
+            let picture = &snapshot.picture;
+            let origin = picture.origin - view.origin;
+            let id: &ElementId = &ghost.id;
+            decorated(
+                &look,
+                renderer,
+                scale,
+                shaders,
+                titles,
+                frame,
+                flipped,
+                |renderer, out| {
+                    let element = TextureRenderElement::from_static_texture(
+                        id.clone(),
+                        renderer.context_id(),
+                        scale.point_to_physical(origin).to_f64(),
+                        picture.texture.clone(),
+                        picture.scale,
+                        picture.transform,
+                        Some(opacity),
+                        None,
+                        Some(picture.size),
+                        None,
+                        Kind::Unspecified,
+                    );
+                    out.extend(
+                        style_surface(element, &look, scale, shaders, frame, flipped)
+                            .map(SceneElement::Ghost),
+                    );
+                },
+            )
+        })
+        .collect()
+}
+
+/// A window's decorations around its surface: the border and title bar in front of it, the
+/// shadow behind. `surfaces` pushes the surface itself, which is what differs between a live
+/// window and a ghost of one.
+#[allow(clippy::too_many_arguments)]
+fn decorated(
+    look: &Look,
+    renderer: &mut GlesRenderer,
+    scale: Scale,
+    shaders: &Shaders,
+    titles: &mut TitleCache,
+    frame: Size<i32, Physical>,
+    flipped: bool,
+    surfaces: impl FnOnce(&mut GlesRenderer, &mut Vec<SceneElement>),
+) -> Vec<SceneElement> {
     let style = look.style;
     let opacity = f32::from(style.opacity()) / f32::from(u8::MAX);
     let drawn = scale.rect_to_physical(look.drawn);
@@ -140,58 +260,38 @@ fn window_elements(
         )));
     }
 
+    // A look a program gave replaces the style's bar; otherwise the bar is drawn from the same
+    // primitives, so there is one way to draw it.
     let title_bar = style.title_bar();
-    if title_bar.height > 0 && title_bar.color.a > 0 {
-        let area = bar_area(
-            look.drawn,
-            i32::from(border.width),
-            i32::from(title_bar.height),
-        );
-        // In front of the band, so it is pushed first: elements run front to back.
-        elements.extend(title_element(
-            &look.title,
-            area,
-            title_bar.color,
+    let builtin;
+    let primitives: &[Primitive] = match &look.primitives {
+        Some(own) => own.primitives(),
+        None if title_bar.height > 0 && title_bar.color.a > 0 => {
+            builtin = crate::primitives::title_bar(
+                title_bar.height,
+                title_bar.color,
+                border.width,
+                style.radius(),
+            );
+            &builtin
+        }
+        None => &[],
+    };
+    for primitive in primitives {
+        primitive_elements(
+            primitive,
+            look,
             renderer,
             scale,
             titles,
             opacity,
-        ));
-        elements.push(SceneElement::Border(shaders.bar(
-            area,
-            bar_radius(radius as f32, (f64::from(title_bar.height) * factor) as f32),
-            channels(title_bar.color),
-            opacity,
-        )));
+            &mut elements,
+            shaders,
+        );
     }
 
-    // The client sized the surface for `target`; it is drawn at `drawn`.
-    let shown_size_over_asked = ElementScale::from((
-        ratio(look.drawn.size.w, look.target.size.w),
-        ratio(look.drawn.size.h, look.target.size.h),
-    ));
-    let drawn_origin = scale.point_to_physical(look.drawn.loc);
-    for element in render_elements_from_surface_tree(
-        renderer,
-        &layer.surface,
-        scale.point_to_physical(layer.origin),
-        factor,
-        opacity,
-        Kind::Unspecified,
-    ) {
-        let rescaled =
-            RescaleRenderElement::from_element(element, drawn_origin, shown_size_over_asked);
-        let Some(cropped) = CropRenderElement::from_element(rescaled, factor, drawn) else {
-            continue;
-        };
-        // A user's effect draws every window, even one with square corners.
-        let element = if radius > 0.0 || shaders.has_effect() {
-            shaders.rounded(cropped, drawn, radius as f32, frame.h, flipped, look.effect)
-        } else {
-            Styled::plain(cropped)
-        };
-        elements.push(SceneElement::Window(element));
-    }
+    surfaces(renderer, &mut elements);
+
     // Last, so it is behind the window and the bar, in front of what is below.
     let shadow = style.shadow();
     if shadow.blur > 0 && shadow.color.a > 0 {
@@ -217,6 +317,89 @@ fn window_elements(
         )));
     }
     elements
+}
+
+/// One element of a window's surface, scaled from the size its client drew it for to the
+/// rectangle it is drawn in, cut to that rectangle, and with its corners cut if the style asks
+/// for them. `None` when nothing of it falls inside.
+fn style_surface<E: RenderElement<GlesRenderer>>(
+    element: E,
+    look: &Look,
+    scale: Scale,
+    shaders: &Shaders,
+    frame: Size<i32, Physical>,
+    flipped: bool,
+) -> Option<Styled<CropRenderElement<RescaleRenderElement<E>>>> {
+    let drawn = scale.rect_to_physical(look.drawn);
+    let factor = scale.factor();
+    let radius = f64::from(look.style.radius()) * factor;
+    // The client sized the surface for `target`; it is drawn at `drawn`.
+    let shown_size_over_asked = ElementScale::from((
+        ratio(look.drawn.size.w, look.target.size.w),
+        ratio(look.drawn.size.h, look.target.size.h),
+    ));
+    let drawn_origin = scale.point_to_physical(look.drawn.loc);
+    let rescaled = RescaleRenderElement::from_element(element, drawn_origin, shown_size_over_asked);
+    let cropped = CropRenderElement::from_element(rescaled, factor, drawn)?;
+    // A user's effect draws every window, even one with square corners.
+    Some(if radius > 0.0 || shaders.has_effect() {
+        shaders.rounded(cropped, drawn, radius as f32, frame.h, flipped, look.effect)
+    } else {
+        Styled::plain(cropped)
+    })
+}
+
+/// Draws one primitive of a window's look, in front of what was pushed after it.
+#[allow(clippy::too_many_arguments)]
+fn primitive_elements(
+    primitive: &Primitive,
+    look: &Look,
+    renderer: &mut GlesRenderer,
+    scale: Scale,
+    titles: &mut TitleCache,
+    opacity: f32,
+    out: &mut Vec<SceneElement>,
+    shaders: &Shaders,
+) {
+    let factor = scale.factor();
+    match primitive {
+        Primitive::Rect {
+            area,
+            radius,
+            color,
+        } => {
+            let area = area.resolve(look.drawn);
+            if area.size.w <= 0 || area.size.h <= 0 || color.a == 0 {
+                return;
+            }
+            // Never rounder than half the height, so a band is a band and not a blob.
+            let rounded = bar_radius(
+                (f64::from(*radius) * factor) as f32,
+                (f64::from(area.size.h) * factor) as f32,
+            );
+            out.push(SceneElement::Border(shaders.bar(
+                area,
+                rounded,
+                channels(*color),
+                opacity,
+            )));
+        }
+        Primitive::Text { area, source, over } => {
+            let text = match source {
+                TextSource::Title => look.title.as_str(),
+                TextSource::Literal(text) => text.as_str(),
+            };
+            out.extend(title_element(
+                text,
+                area.resolve(look.drawn),
+                *over,
+                renderer,
+                scale,
+                titles,
+                opacity,
+            ));
+        }
+    }
 }
 
 /// The title written on a bar of `area` (logical), if there is a title and room for it.

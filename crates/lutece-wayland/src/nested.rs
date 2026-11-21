@@ -126,6 +126,11 @@ impl NestedBackend {
         self.wayland.set_workspaces(workspaces);
     }
 
+    /// Sets the decorations programs gave windows; see [`WaylandBackend::set_looks`].
+    pub fn set_looks(&mut self, looks: Vec<(lutece::WinId, crate::WindowLook)>) {
+        self.wayland.set_looks(looks);
+    }
+
     /// Sets the outlines drawn over the windows and the cursor's image, replacing the ones
     /// before; an empty list takes them away. They are only drawn: no window moves and no
     /// client is told.
