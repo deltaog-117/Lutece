@@ -11,6 +11,7 @@
 //! program put them.
 
 use crate::animation::Animation;
+use crate::effect::EffectInput;
 use crate::glide::{StyleGlide, drawn_style};
 use crate::slide::Leaving;
 use lutece::{Rect, Style, WinId, WindowInfo};
@@ -65,6 +66,8 @@ pub(crate) struct Entry {
     pub(crate) style_glide: Option<StyleGlide>,
     /// The window on its way off the screen after it was hidden, with a style that slides.
     pub(crate) leaving: Option<Leaving>,
+    /// Whether `animation` is the window coming back with its workspace and not a move.
+    pub(crate) sliding_in: bool,
     /// Whether the window was ever placed. A window that was not is new and does not slide
     /// in; one that was is coming back.
     pub(crate) shown_before: bool,
@@ -89,6 +92,25 @@ impl Entry {
         self.leaving
             .as_ref()
             .filter(|leaving| !leaving.finished(now))
+    }
+
+    /// What a user's effect is told about the window at `now`: the slide it is in, else the
+    /// style glide, else that it rests.
+    pub(crate) fn effect_input(&self, now: Instant) -> EffectInput {
+        let slide_out = self.leaving_at(now).map(|leaving| leaving.progress_at(now));
+        let moving = self
+            .animation
+            .as_ref()
+            .filter(|animation| !animation.finished(now));
+        let slide_in = moving
+            .filter(|_| self.sliding_in)
+            .map(|animation| animation.progress_at(now));
+        let glide = self
+            .style_glide
+            .as_ref()
+            .filter(|glide| !glide.finished(now))
+            .map(|glide| glide.progress_at(now));
+        EffectInput::pick(slide_out, slide_in, glide)
     }
 
     /// The rectangle the window is placed at, or while it slides away the one it left from:
@@ -143,9 +165,8 @@ pub(crate) struct Look {
     /// What the client calls the window, for the title bar; empty when the style has no bar,
     /// so a window without one costs no copy.
     pub(crate) title: String,
-    /// How far the window's style glide is, from 0 to 1; 1 when it rests. Only a user's effect
-    /// reads it.
-    pub(crate) progress: f32,
+    /// How far the window's change is and which one it is. Only a user's effect reads it.
+    pub(crate) effect: EffectInput,
 }
 
 impl Look {
@@ -156,7 +177,7 @@ impl Look {
             target: Rectangle::new(self.target.loc - by, self.target.size),
             drawn: Rectangle::new(self.drawn.loc - by, self.drawn.size),
             title: self.title.clone(),
-            progress: self.progress,
+            effect: self.effect,
         }
     }
 }
@@ -230,6 +251,7 @@ impl Windows {
                 animation: None,
                 style_glide: None,
                 leaving: None,
+                sliding_in: false,
                 shown_before: false,
             },
         );
@@ -512,11 +534,7 @@ fn window_layers(id: WinId, entry: &Entry, target: Rect, title: &str, now: Insta
             } else {
                 String::new()
             },
-            progress: entry
-                .style_glide
-                .as_ref()
-                .filter(|glide| !glide.finished(now))
-                .map_or(1.0, |glide| glide.progress_at(now)),
+            effect: entry.effect_input(now),
         }),
     });
     layers

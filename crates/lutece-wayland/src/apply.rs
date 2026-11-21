@@ -161,6 +161,9 @@ fn place(state: &mut State, placement: &Placement, animate: bool) {
         .filter(|from| (animate || sliding_in) && *from != placement.rect)
         .filter(|_| entry.style.transition().duration_ms > 0)
         .map(|from| Animation::new(from, placement.rect, now, entry.style.transition()));
+    // Only the placement that starts the slide is one; a later move is not, even while the
+    // window is still on its way in.
+    entry.sliding_in = sliding_in && entry.animation.is_some();
     let size = (
         to_protocol(placement.rect.width()),
         to_protocol(placement.rect.height()),

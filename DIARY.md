@@ -1858,3 +1858,10 @@ Animation:
 ### 2026-11-21 – Spike: keeping a closed window's picture
 
 - **Result:** a clone of a surface's `GlesTexture` outlives the surface and draws as a static texture; checked with a throwaway program on a real GPU (removed). The write-up, with what is still open (dmabuf clients, subsurfaces), is in the window-manager diary of the same date. No code in lutece changed.
+
+### 2026-11-21 – A user shader on the workspace slide
+
+- **Scope:** the window shader learns which change a window is in. `effect.rs` gets `Phase`, `EffectInput` and the `transition` uniform with `TRANSITION_*` macros built from one table; `windows.rs` gets `Entry::effect_input` and a `sliding_in` flag; `Animation` and `Leaving` get `progress_at`. `Look.progress` became `Look.effect`.
+- **Why a global:** it breaks no effect file written before, as `tex` does not; the window-manager diary has the reasoning.
+- **Tests:** the table, the pick order, a property that the progress is always 0 to 1 (a NaN reads as rest), and a shader that reads `transition` validated with `glslangValidator`.
+- **Not seen on a screen.**

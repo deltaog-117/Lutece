@@ -84,6 +84,11 @@ impl Leaving {
     pub(crate) fn rect_at(&self, now: Instant) -> Rect {
         self.animation.rect_at(now)
     }
+
+    /// How far the slide is at `now`, eased, from 0 to 1. For a user's effect.
+    pub(crate) fn progress_at(&self, now: Instant) -> f32 {
+        self.animation.progress_at(now)
+    }
 }
 
 #[cfg(test)]

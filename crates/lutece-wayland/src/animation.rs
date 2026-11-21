@@ -56,6 +56,12 @@ impl Animation {
         .unwrap_or(self.to)
     }
 
+    /// How far along it is at `now`, eased, from 0 to 1. For a user's effect.
+    pub(crate) fn progress_at(&self, now: Instant) -> f32 {
+        // Within 0 to 1 by the clamp, so the narrowing loses nothing a shader could see.
+        ease(self.transition.curve, self.progress(now)).clamp(0.0, 1.0) as f32
+    }
+
     /// How far along it is at `now`, from 0 to 1. A duration of zero is done at once.
     fn progress(&self, now: Instant) -> f64 {
         let total = Duration::from_millis(u64::from(self.transition.duration_ms));

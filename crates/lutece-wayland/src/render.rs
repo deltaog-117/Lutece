@@ -186,14 +186,7 @@ fn window_elements(
         };
         // A user's effect draws every window, even one with square corners.
         let element = if radius > 0.0 || shaders.has_effect() {
-            shaders.rounded(
-                cropped,
-                drawn,
-                radius as f32,
-                frame.h,
-                flipped,
-                look.progress,
-            )
+            shaders.rounded(cropped, drawn, radius as f32, frame.h, flipped, look.effect)
         } else {
             Styled::plain(cropped)
         };

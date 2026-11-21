@@ -5,7 +5,7 @@
 //! shader around the window. Both measure in framebuffer pixels, so they follow the
 //! window however it is scaled while it moves.
 
-use crate::effect::{EffectError, window_effect_source};
+use crate::effect::{EffectError, EffectInput, window_effect_source};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{
@@ -268,6 +268,7 @@ impl Shaders {
                     UniformName::new("fb_height", UniformType::_1f),
                     UniformName::new("flip", UniformType::_1f),
                     UniformName::new("progress", UniformType::_1f),
+                    UniformName::new("transition", UniformType::_1i),
                 ],
             )
             .map_err(|error| EffectError::Compile(error.to_string()))?;
@@ -374,8 +375,8 @@ impl Shaders {
 
     /// Wraps `inner` so its surfaces are drawn with the corners cut to `radius` (physical
     /// pixels) inside `rect`. `fb_height` is the framebuffer's height, and `flip` is true
-    /// when the frame is drawn flipped, which turns the framebuffer's y axis over. `progress`
-    /// is how far a gliding window is, from 0 to 1, and 1 at rest; only a user effect reads it.
+    /// when the frame is drawn flipped, which turns the framebuffer's y axis over. `effect` is
+    /// how far the window's change is and which change it is; only a user effect reads it.
     pub(crate) fn rounded<E>(
         &self,
         inner: E,
@@ -383,7 +384,7 @@ impl Shaders {
         radius: f32,
         fb_height: i32,
         flip: bool,
-        progress: f32,
+        effect: EffectInput,
     ) -> Styled<E> {
         let mut uniforms = vec![
             Uniform::new(
@@ -400,9 +401,10 @@ impl Shaders {
             Uniform::new("flip", if flip { 1.0f32 } else { 0.0 }),
         ];
         let program = match &self.effect {
-            Some(effect) => {
-                uniforms.push(Uniform::new("progress", progress));
-                effect.clone()
+            Some(program) => {
+                uniforms.push(Uniform::new("progress", effect.progress));
+                uniforms.push(Uniform::new("transition", effect.phase.code()));
+                program.clone()
             }
             None => self.window.clone(),
         };

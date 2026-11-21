@@ -15,7 +15,12 @@
 //! ```
 //!
 //! `tex` (the window's picture, sampled at `uv`) can be read too, for effects that look at
-//! neighbouring pixels. GLSL ES 1.00 has no recursion and only loops with a fixed count, so
+//! neighbouring pixels. So can `transition`, an `int` that says which kind of change the
+//! window is in, compared with `TRANSITION_GLIDE` (it appears, or its opacity or radius
+//! changes, or it rests), `TRANSITION_SLIDE_IN` (it comes back with its workspace) and
+//! `TRANSITION_SLIDE_OUT` (it leaves with its workspace). It is a global and not an argument,
+//! so an effect written before it existed still builds. During a slide, `progress` is the
+//! eased progress of the slide. GLSL ES 1.00 has no recursion and only loops with a fixed count, so
 //! the cost per pixel is bounded by what is written; the size of the file is limited as well.
 //! The file is the user's own, read from their configuration, with the same trust as it. Only
 //! the directives of the preprocessor that make sense in a function are allowed: the version
@@ -50,6 +55,84 @@ pub enum EffectError {
     /// The driver refused the finished shader, with its message.
     #[error("the shader does not compile: {0}")]
     Compile(String),
+}
+
+/// The kind of change a window is in while a user's effect draws it.
+///
+/// The codes are what the shader sees as `transition`; the `TRANSITION_*` macros in the shader
+/// are made from [`PHASES`], so the two cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Phase {
+    /// The window appears, its opacity or radius glides, or it rests.
+    Glide,
+    /// The window comes back with its workspace.
+    SlideIn,
+    /// The window leaves with its workspace.
+    SlideOut,
+}
+
+impl Phase {
+    /// The number the shader reads.
+    pub(crate) const fn code(self) -> i32 {
+        match self {
+            Self::Glide => 0,
+            Self::SlideIn => 1,
+            Self::SlideOut => 2,
+        }
+    }
+}
+
+/// Every phase with the name of its macro in the shader. A phase added to [`Phase`] stops the
+/// match in [`Phase::code`] from compiling until it has a code; one left out of this table is
+/// caught by a test.
+const PHASES: [(&str, Phase); 3] = [
+    ("TRANSITION_GLIDE", Phase::Glide),
+    ("TRANSITION_SLIDE_IN", Phase::SlideIn),
+    ("TRANSITION_SLIDE_OUT", Phase::SlideOut),
+];
+
+/// What a user's effect is told about the window it draws, besides the window itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct EffectInput {
+    /// How far the change is, from 0 to 1; 1 when the window rests.
+    pub(crate) progress: f32,
+    /// Which change it is.
+    pub(crate) phase: Phase,
+}
+
+impl EffectInput {
+    /// A window at rest.
+    pub(crate) const REST: Self = Self {
+        progress: 1.0,
+        phase: Phase::Glide,
+    };
+
+    /// What to tell the effect given the progress of each change that is going on, or `None`
+    /// for one that is not. A slide wins over a glide, since the window's place is what the
+    /// eye follows, and leaving wins over coming in because a window cannot do both.
+    pub(crate) fn pick(slide_out: Option<f32>, slide_in: Option<f32>, glide: Option<f32>) -> Self {
+        let (phase, progress) = match (slide_out, slide_in, glide) {
+            (Some(progress), _, _) => (Phase::SlideOut, progress),
+            (None, Some(progress), _) => (Phase::SlideIn, progress),
+            (None, None, Some(progress)) => (Phase::Glide, progress),
+            (None, None, None) => return Self::REST,
+        };
+        // A NaN reads as at rest, so a shader never sees one.
+        let progress = if progress.is_nan() {
+            1.0
+        } else {
+            progress.clamp(0.0, 1.0)
+        };
+        Self { progress, phase }
+    }
+}
+
+/// The macros that name the phases, one line each.
+fn phase_defines() -> String {
+    PHASES
+        .iter()
+        .map(|(name, phase)| format!("#define {name} {}\n", phase.code()))
+        .collect()
 }
 
 /// The directives an effect may use.
@@ -112,7 +195,10 @@ pub fn check_effect(source: &str) -> Result<(), EffectError> {
 /// Returns the rule `source` breaks (see [`check_effect`]).
 pub fn window_effect_source(source: &str) -> Result<String, EffectError> {
     check_effect(source)?;
-    let declarations = format!("uniform float progress;\n#line 1\n{source}\n#line 1000\n");
+    let declarations = format!(
+        "uniform float progress;\nuniform int transition;\n{}#line 1\n{source}\n#line 1000\n",
+        phase_defines()
+    );
     Ok(WINDOW_SHADER
         .replacen("//_EFFECT_DECL_", &declarations, 1)
         .replacen(
@@ -242,7 +328,60 @@ mod tests {
         assert_eq!(check_effect(" \n\t"), Err(EffectError::Size));
     }
 
+    #[test]
+    fn every_phase_has_its_own_macro_and_code() {
+        let codes: Vec<i32> = PHASES.iter().map(|(_, phase)| phase.code()).collect();
+        let mut unique = codes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), codes.len(), "codes are distinct");
+        for phase in [Phase::Glide, Phase::SlideIn, Phase::SlideOut] {
+            assert!(
+                PHASES.iter().any(|(_, listed)| *listed == phase),
+                "{phase:?}"
+            );
+        }
+        let built = window_effect_source(IDENTITY).expect("allowed");
+        assert!(built.contains("#define TRANSITION_SLIDE_OUT 2"));
+        assert!(built.contains("uniform int transition;"));
+    }
+
+    #[test]
+    fn an_effect_that_reads_the_transition_builds_into_a_valid_shader() {
+        let source = "vec4 effect(vec4 color, vec2 uv, vec2 size, float progress) {
+            if (transition == TRANSITION_SLIDE_IN) { return color * progress; }
+            if (transition == TRANSITION_SLIDE_OUT) { return color * (1.0 - progress); }
+            return color;
+        }";
+        let built = window_effect_source(source).expect("allowed");
+        require_validator(validated(&built));
+    }
+
+    #[test]
+    fn a_slide_is_told_to_the_effect_before_a_glide() {
+        let rest = EffectInput::pick(None, None, None);
+        assert_eq!(rest, EffectInput::REST);
+        let glide = EffectInput::pick(None, None, Some(0.25));
+        assert_eq!((glide.phase, glide.progress), (Phase::Glide, 0.25));
+        let coming = EffectInput::pick(None, Some(0.5), Some(0.25));
+        assert_eq!((coming.phase, coming.progress), (Phase::SlideIn, 0.5));
+        let going = EffectInput::pick(Some(0.75), Some(0.5), Some(0.25));
+        assert_eq!((going.phase, going.progress), (Phase::SlideOut, 0.75));
+    }
+
     proptest! {
+        /// Whatever the three progresses are, even NaN or out of range, the effect is told a
+        /// number from 0 to 1.
+        #[test]
+        fn the_progress_an_effect_reads_is_always_from_0_to_1(
+            out in prop::option::of(prop::num::f32::ANY),
+            into in prop::option::of(prop::num::f32::ANY),
+            glide in prop::option::of(prop::num::f32::ANY),
+        ) {
+            let input = EffectInput::pick(out, into, glide);
+            prop_assert!((0.0..=1.0).contains(&input.progress), "{}", input.progress);
+        }
+
         /// A source over the limit is refused however it is made.
         #[test]
         fn a_source_past_the_limit_is_refused(extra in 1usize..2000) {
