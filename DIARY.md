@@ -1854,3 +1854,7 @@ Animation:
 - **Why no ghost picture:** the windows of a workspace that is left still exist, so they are drawn where the slide puts them. The close animation, which does need the picture of a window that is gone, is a separate step.
 - **Pure parts:** `off_left`, `off_right` and `Leaving` are functions of rectangles and time, with property tests (a window inside its screen ends outside it; size and row are kept; no overflow at the edge of `i32`).
 - **Not unit-tested:** `place` and the hide in `apply_changes` need a display. Not seen on a screen.
+
+### 2026-11-21 – Spike: keeping a closed window's picture
+
+- **Result:** a clone of a surface's `GlesTexture` outlives the surface and draws as a static texture; checked with a throwaway program on a real GPU (removed). The write-up, with what is still open (dmabuf clients, subsurfaces), is in the window-manager diary of the same date. No code in lutece changed.
