@@ -6,13 +6,15 @@
 
 use crate::dmabuf::Dmabufs;
 use crate::focus::Focus;
+use crate::foreign::{ForeignToplevels, Snapshot};
 use crate::pointer::PointerState;
 use crate::scale::Scale;
 use crate::settings::InputSettings;
 use crate::translate;
 use crate::windows::Windows;
+use crate::workspaces::ExtWorkspaces;
 use crate::xwayland::StateReader;
-use lutece::{Event, Insets, KeyPress, Output as CoreOutput, OutputId, Rect, WindowInfo};
+use lutece::{Event, Insets, KeyPress, Output as CoreOutput, OutputId, Rect, WinId, WindowInfo};
 use smithay::backend::input::{KeyState, Keycode};
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::desktop::{PopupKind, PopupManager};
@@ -79,6 +81,10 @@ pub(crate) struct State {
     /// with nothing reserved has no entry.
     pub(crate) reserved: HashMap<OutputId, Insets>,
     pub(crate) layer_shell: WlrLayerShellState,
+    /// The window list bars read, and the clients bound to it.
+    pub(crate) foreign: ForeignToplevels,
+    /// The workspace list bars read, and the clients bound to it.
+    pub(crate) workspaces: ExtWorkspaces,
     /// The window the core last focused, which has the keyboard unless a layer surface
     /// takes it.
     pub(crate) window_focus: Option<Focus>,
@@ -162,6 +168,8 @@ impl State {
             output_ids: Vec::new(),
             reserved: HashMap::new(),
             layer_shell: WlrLayerShellState::new::<Self>(display),
+            foreign: ForeignToplevels::new(display),
+            workspaces: ExtWorkspaces::new(display),
             window_focus: None,
             layer_focus: None,
             dmabufs: Dmabufs::new(),
@@ -226,6 +234,7 @@ impl State {
         }
         let info = self.toplevel_info(&toplevel);
         self.windows.remember_info(id, info.clone());
+        self.foreign.opened(&self.display, id, Snapshot::of(&info));
         self.events.push(Event::WindowOpened { id, info });
         // A window that asked for fullscreen before it opened asks again now that the
         // core knows it.
@@ -233,6 +242,12 @@ impl State {
             self.events
                 .push(Event::FullscreenRequested { id, on: true });
         }
+    }
+
+    /// Tells the core, and the clients that list windows, that the window `id` is gone.
+    pub(crate) fn report_closed(&mut self, id: WinId) {
+        self.events.push(Event::WindowClosed(id));
+        self.foreign.closed(id);
     }
 
     /// What the client has set on `toplevel`: its title and app id, and the window it is a
@@ -270,6 +285,7 @@ impl State {
         };
         let info = self.toplevel_info(toplevel);
         if self.windows.info_changed(id, &info) {
+            self.foreign.set_info(id, &info.title, &info.class);
             self.events.push(Event::WindowInfoChanged { id, info });
         }
     }
@@ -366,7 +382,7 @@ impl XdgShellHandler for State {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         if let Some(id) = self.windows.remove(&surface) {
-            self.events.push(Event::WindowClosed(id));
+            self.report_closed(id);
         }
     }
 
@@ -468,7 +484,14 @@ fn server_side(toplevel: &ToplevelSurface) {
     }
 }
 
-impl OutputHandler for State {}
+impl OutputHandler for State {
+    /// A client bound a `wl_output`: the workspace group it listed is on that output too. A
+    /// client binds its globals in any order, so this is how the group learns of outputs bound
+    /// after the workspace manager.
+    fn output_bound(&mut self, _output: WlOutput, wl_output: WlOutputResource) {
+        self.workspaces.enter_output(&wl_output);
+    }
+}
 
 impl BufferHandler for State {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}

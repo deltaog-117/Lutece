@@ -425,6 +425,12 @@ impl DrmBackend {
         }
     }
 
+    /// Sets the workspaces the core has, for the clients that list them (bars); see
+    /// [`WaylandBackend::set_workspaces`].
+    pub fn set_workspaces(&mut self, workspaces: &[crate::WorkspaceInfo]) {
+        self.wayland.set_workspaces(workspaces);
+    }
+
     /// Makes the keyboard and the pointer do nothing, or take them again. While read-only, no
     /// key reaches the core or a client and the pointer stays where it is; only the release of
     /// a key or button already down gets through. The chords that end the session or switch

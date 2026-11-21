@@ -89,6 +89,9 @@ Author: deltaog-117
 
 - ✅ Layouts behind a trait – `Layout` is a trait; a workspace holds a `LayoutName` and the engine a `LayoutSet` (`Engine::with_layouts`); the built-in layouts (tile, monocle, grid, centered master) are the new crate `lutece-layouts`, and the core keeps one fallback, `Columns`. A name the set lacks is arranged by the fallback and listed by `Engine::missing_layouts`. `snapshot::VERSION` is 3. This replaces the closed enum of the earlier items above, which describe what was built then
 
+- ✅ Wayland window list for bars – `zwlr_foreign_toplevel_manager_v1` in `lutece-wayland` (`foreign.rs`): title, app id, active and fullscreen state per toplevel, changes and closes, late binders, and the activate, close and fullscreen requests. Checked with ten tests against a real client, and by Quickshell reading the focused window's title, app id and active state from a nested host. Not sent: `output_enter`, `output_leave`, `parent`; X11 windows keep the title they opened with.
+- ✅ Wayland workspace list for bars – `ext_workspace_manager_v1` in `lutece-wayland` (`workspaces.rs`): one group of every workspace and every output, name, id and active state, changes, workspaces that appear or go, late binders, and `activate` after the manager's `commit` as a request to view the tag. The core's workspaces are given with `set_workspaces`. Checked with 8 tests against a real client and by a helper reading a host nested in a window of the live session, which switched the workspace. Not offered: creating, removing, deactivating or assigning a workspace, and a group for each output.
+
 ---
 
 ## 🔥 High Priority (Critical)

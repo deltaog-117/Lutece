@@ -119,6 +119,13 @@ impl NestedBackend {
         self.wayland.set_repeat(settings);
     }
 
+    /// Sets the workspaces the core has, for the clients that list them (bars); see
+    /// [`WaylandBackend::set_workspaces`]. A request of such a client to show a workspace comes
+    /// back from [`next_events`](Self::next_events) as an action.
+    pub fn set_workspaces(&mut self, workspaces: &[crate::WorkspaceInfo]) {
+        self.wayland.set_workspaces(workspaces);
+    }
+
     /// Sets the outlines drawn over the windows and the cursor's image, replacing the ones
     /// before; an empty list takes them away. They are only drawn: no window moves and no
     /// client is told.

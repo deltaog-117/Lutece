@@ -1813,3 +1813,37 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-21 | Initial entry | deltaog-117 |
+
+
+### 2026-11-21 – The Wayland window list for bars
+
+**Status:** Confirmed
+
+- **Why:** a bar that is not written for one compositor reads the window list from the standard protocol. Quickshell reads `wlr-foreign-toplevel-management`. Smithay 0.7 has a server for the `ext` list only, which carries no state and cannot activate or close a window, so the wlr protocol is written here on the generated bindings (`wayland-protocols-wlr`, server feature).
+- **How:** `foreign.rs` keeps what each window looks like to a client (a `Snapshot`) and sends only what changed (a `Delta`), both plain data with property tests. The hooks are where the backend already learns a thing: a window opening, its title or app id changing, its closing (Wayland and X11), the focus, and fullscreen. The protocol's requests become events the core already has, so the core still decides.
+- **A gap the tests found:** after a client sent `stop`, its existing handles kept receiving changes. The protocol allows no event after `finished`, so a client's handles are dropped when it stops.
+- **A mistake in my own test:** the first test setup threw away the backend's first events, which tell the core about the screen, so no window was placed or focused and nothing was ever active. The setup now runs them.
+- **Checked:** ten integration tests against a real `wayland-client`, five unit tests, and the repo's check. Quickshell, run against a new host nested in a window, read the title, app id and active state of a terminal, and the active toplevel followed a second window.
+- **Not done:** the output a window is on (`output_enter`), `parent`, and title changes of X11 windows after they open, which the core does not learn of either.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-21 | Initial entry | deltaog-117 |
+
+### 2026-11-21 – The Wayland workspace list for bars
+
+**Status:** Confirmed
+
+- **Why:** the bar's toolkit has no type for the standard workspace protocol, so a small helper reads `ext-workspace-v1` for it; any compositor that serves the protocol then needs no backend of its own in the bar. Smithay 0.7 has no server for it, so it is written here on `wayland-protocols`.
+- **How:** `workspaces.rs` works out what a client must be told from plain data (`plan`: the tags it does not know, the ones gone, the ones whose state differs), so that part has unit tests. The core has one pool of workspaces that every output draws from, so a client gets one group holding every workspace and every output; a workspace is active when an output shows it. The host gives the list with `set_workspaces` after each batch of events; the backend sends only a change.
+- **Only `activate`:** the protocol lets a client ask to create, remove, deactivate and assign workspaces. The core has a fixed set of tags, so none of these is offered. An activate waits for the manager's `commit`, as the protocol says, then becomes `Action::ViewTag`, which the core already knows.
+- **Checked:** eight tests against a real `wayland-client`, and a helper run against a host nested in a window of the live session: it read the workspaces, switched to 3, ignored a workspace that does not exist, and switched back.
+- **Not done:** one group for each output, and outputs that come after a client binds (the group has the outputs at the time it binds).
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-21 | Initial entry | deltaog-117 |

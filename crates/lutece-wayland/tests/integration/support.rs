@@ -26,6 +26,15 @@ use wayland_client::protocol::{wl_compositor::WlCompositor, wl_surface::WlSurfac
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop, event_created_child,
 };
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_group_handle_v1::{
+    self, ExtWorkspaceGroupHandleV1,
+};
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::{
+    self, ExtWorkspaceHandleV1,
+};
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::{
+    self, ExtWorkspaceManagerV1,
+};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
@@ -48,6 +57,12 @@ use wayland_protocols::xdg::shell::client::xdg_positioner::{self, XdgPositioner}
 use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::{
+    self, ZwlrForeignToplevelHandleV1,
+};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::{
+    self, ZwlrForeignToplevelManagerV1,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
     Layer, ZwlrLayerShellV1,
 };
@@ -113,8 +128,51 @@ pub struct Popup {
 /// Marks an `xdg_surface` as belonging to a popup, not a window.
 pub struct PopupSlot;
 
+/// What a workspace list client was told about one workspace.
+#[derive(Debug)]
+pub struct WorkspaceListed {
+    pub id: String,
+    pub name: String,
+    /// The bits of `ext_workspace_handle_v1.state`.
+    pub state: u32,
+    /// The bits of `ext_workspace_handle_v1.workspace_capabilities`.
+    pub capabilities: u32,
+    pub removed: bool,
+    handle: ExtWorkspaceHandleV1,
+}
+
+/// What a workspace list client was told about its group.
+#[derive(Debug, Default)]
+pub struct GroupListed {
+    pub capabilities: u32,
+    pub outputs: usize,
+    /// How many workspaces are in the group now.
+    pub members: usize,
+}
+
+/// What a window list client was told about one toplevel.
+#[derive(Debug)]
+pub struct Listed {
+    pub title: String,
+    pub app_id: String,
+    /// The values of `zwlr_foreign_toplevel_handle_v1.state` that hold.
+    pub states: Vec<u32>,
+    pub closed: bool,
+    /// How many times the client was told a batch of changes took effect.
+    pub dones: usize,
+    handle: ZwlrForeignToplevelHandleV1,
+}
+
 #[derive(Default)]
 struct Observed {
+    workspace_manager: Option<ExtWorkspaceManagerV1>,
+    workspaces: Vec<WorkspaceListed>,
+    group: GroupListed,
+    workspace_dones: usize,
+    workspace_finished: bool,
+    toplevel_manager: Option<ZwlrForeignToplevelManagerV1>,
+    listed: Vec<Listed>,
+    listing_finished: bool,
     compositor: Option<WlCompositor>,
     wm_base: Option<XdgWmBase>,
     seat: Option<WlSeat>,
@@ -268,6 +326,94 @@ impl TestClient {
     }
 
     /// Whether the compositor offers `wlr-layer-shell`.
+    pub fn has_workspace_list(&self) -> bool {
+        self.observed.workspace_manager.is_some()
+    }
+
+    /// The workspaces the compositor listed to this client, in the order it listed them.
+    pub fn workspaces(&self) -> &[WorkspaceListed] {
+        &self.observed.workspaces
+    }
+
+    /// What the compositor said about this client's workspace group.
+    pub fn workspace_group(&self) -> &GroupListed {
+        &self.observed.group
+    }
+
+    /// How many batches of workspace changes the compositor said took effect.
+    pub fn workspace_dones(&self) -> usize {
+        self.observed.workspace_dones
+    }
+
+    pub fn workspace_list_finished(&self) -> bool {
+        self.observed.workspace_finished
+    }
+
+    /// Asks for the listed workspace `index` to be activated; it takes effect on the commit.
+    pub fn activate_workspace(&mut self, index: usize) {
+        self.observed.workspaces[index].handle.activate();
+    }
+
+    pub fn commit_workspaces(&mut self) {
+        self.observed
+            .workspace_manager
+            .as_ref()
+            .expect("the manager is bound")
+            .commit();
+    }
+
+    pub fn stop_workspace_list(&mut self) {
+        self.observed
+            .workspace_manager
+            .as_ref()
+            .expect("the manager is bound")
+            .stop();
+    }
+
+    pub fn has_toplevel_list(&self) -> bool {
+        self.observed.toplevel_manager.is_some()
+    }
+
+    /// The toplevels the compositor listed to this client, in the order it listed them.
+    pub fn listed(&self) -> &[Listed] {
+        &self.observed.listed
+    }
+
+    /// Whether the compositor said it is done with this client's window list.
+    pub fn listing_finished(&self) -> bool {
+        self.observed.listing_finished
+    }
+
+    /// Asks the compositor to focus the listed toplevel `index`.
+    pub fn activate_listed(&mut self, index: usize) {
+        let seat = self.observed.seat.clone().expect("a seat");
+        self.observed.listed[index].handle.activate(&seat);
+    }
+
+    /// Asks the compositor to close the listed toplevel `index`.
+    pub fn close_listed(&mut self, index: usize) {
+        self.observed.listed[index].handle.close();
+    }
+
+    /// Asks the compositor to make the listed toplevel `index` fullscreen, or not.
+    pub fn fullscreen_listed(&mut self, index: usize, on: bool) {
+        let handle = &self.observed.listed[index].handle;
+        if on {
+            handle.set_fullscreen(None);
+        } else {
+            handle.unset_fullscreen();
+        }
+    }
+
+    /// Asks the compositor to stop sending the window list.
+    pub fn stop_listing(&mut self) {
+        self.observed
+            .toplevel_manager
+            .as_ref()
+            .expect("the manager is bound")
+            .stop();
+    }
+
     pub fn has_layer_shell(&self) -> bool {
         self.observed.layer_shell.is_some()
     }
@@ -822,6 +968,12 @@ impl Dispatch<WlRegistry, ()> for Observed {
             "zwlr_layer_shell_v1" => {
                 state.layer_shell = Some(registry.bind(name, version.min(4), qh, ()));
             }
+            "ext_workspace_manager_v1" => {
+                state.workspace_manager = Some(registry.bind(name, 1, qh, ()));
+            }
+            "zwlr_foreign_toplevel_manager_v1" => {
+                state.toplevel_manager = Some(registry.bind(name, version.min(3), qh, ()));
+            }
             "zwp_linux_dmabuf_v1" => {
                 state.dmabuf = Some(registry.bind(name, version.min(4), qh, ()));
             }
@@ -1312,4 +1464,158 @@ impl Dispatch<ZwpLinuxBufferParamsV1, ()> for Observed {
     event_created_child!(Observed, ZwpLinuxBufferParamsV1, [
         zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (WlBuffer, ()),
     ]);
+}
+
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
+                state.listed.push(Listed {
+                    title: String::new(),
+                    app_id: String::new(),
+                    states: Vec::new(),
+                    closed: false,
+                    dones: 0,
+                    handle: toplevel,
+                });
+            }
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => state.listing_finished = true,
+            _ => {}
+        }
+    }
+
+    event_created_child!(Observed, ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(listed) = state.listed.iter_mut().find(|l| &l.handle == handle) else {
+            return;
+        };
+        match event {
+            zwlr_foreign_toplevel_handle_v1::Event::Title { title } => listed.title = title,
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => listed.app_id = app_id,
+            zwlr_foreign_toplevel_handle_v1::Event::State { state: bytes } => {
+                listed.states = bytes
+                    .chunks_exact(4)
+                    .map(|chunk| u32::from_ne_bytes(chunk.try_into().expect("four bytes")))
+                    .collect();
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Done => listed.dones += 1,
+            zwlr_foreign_toplevel_handle_v1::Event::Closed => listed.closed = true,
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ExtWorkspaceManagerV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &ExtWorkspaceManagerV1,
+        event: ext_workspace_manager_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_workspace_manager_v1::Event::Workspace { workspace } => {
+                state.workspaces.push(WorkspaceListed {
+                    id: String::new(),
+                    name: String::new(),
+                    state: 0,
+                    capabilities: 0,
+                    removed: false,
+                    handle: workspace,
+                });
+            }
+            ext_workspace_manager_v1::Event::Done => state.workspace_dones += 1,
+            ext_workspace_manager_v1::Event::Finished => state.workspace_finished = true,
+            _ => {}
+        }
+    }
+
+    event_created_child!(Observed, ExtWorkspaceManagerV1, [
+        ext_workspace_manager_v1::EVT_WORKSPACE_GROUP_OPCODE => (ExtWorkspaceGroupHandleV1, ()),
+        ext_workspace_manager_v1::EVT_WORKSPACE_OPCODE => (ExtWorkspaceHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ExtWorkspaceGroupHandleV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        _: &ExtWorkspaceGroupHandleV1,
+        event: ext_workspace_group_handle_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_workspace_group_handle_v1::Event::Capabilities { capabilities } => {
+                state.group.capabilities = match capabilities {
+                    WEnum::Value(bits) => bits.bits(),
+                    WEnum::Unknown(raw) => raw,
+                };
+            }
+            ext_workspace_group_handle_v1::Event::OutputEnter { .. } => state.group.outputs += 1,
+            ext_workspace_group_handle_v1::Event::OutputLeave { .. } => {
+                state.group.outputs = state.group.outputs.saturating_sub(1);
+            }
+            ext_workspace_group_handle_v1::Event::WorkspaceEnter { .. } => {
+                state.group.members += 1;
+            }
+            ext_workspace_group_handle_v1::Event::WorkspaceLeave { .. } => {
+                state.group.members = state.group.members.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ExtWorkspaceHandleV1, ()> for Observed {
+    fn event(
+        state: &mut Self,
+        handle: &ExtWorkspaceHandleV1,
+        event: ext_workspace_handle_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(listed) = state.workspaces.iter_mut().find(|w| &w.handle == handle) else {
+            return;
+        };
+        match event {
+            ext_workspace_handle_v1::Event::Id { id } => listed.id = id,
+            ext_workspace_handle_v1::Event::Name { name } => listed.name = name,
+            ext_workspace_handle_v1::Event::State { state: bits } => {
+                listed.state = match bits {
+                    WEnum::Value(bits) => bits.bits(),
+                    WEnum::Unknown(raw) => raw,
+                };
+            }
+            ext_workspace_handle_v1::Event::Capabilities { capabilities } => {
+                listed.capabilities = match capabilities {
+                    WEnum::Value(bits) => bits.bits(),
+                    WEnum::Unknown(raw) => raw,
+                };
+            }
+            ext_workspace_handle_v1::Event::Removed => listed.removed = true,
+            _ => {}
+        }
+    }
 }

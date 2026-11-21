@@ -231,6 +231,15 @@ impl WaylandBackend {
         Ok(())
     }
 
+    /// Sets the workspaces the core has, replacing the ones before, and tells the clients that
+    /// list workspaces (`ext_workspace_manager_v1`) what changed. A client's request to activate
+    /// one reaches the core, on the next [`next_events`](Self::next_events), as a request to
+    /// view it.
+    pub fn set_workspaces(&mut self, workspaces: &[crate::WorkspaceInfo]) {
+        let handle = self.display.handle();
+        self.state.workspaces.set(&handle, workspaces.to_vec());
+    }
+
     /// Makes `outputs` the complete set of outputs. One whose id is new appears to
     /// clients, one whose id is missing disappears (its windows are the core's to move),
     /// and one that stays takes the new area. The core hears of the new set on the next

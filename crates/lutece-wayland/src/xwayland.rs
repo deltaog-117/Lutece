@@ -13,6 +13,7 @@
 
 use crate::compositor::State;
 use crate::focus::Focus;
+use crate::foreign::Snapshot;
 use lutece::{Event, WinId, WindowInfo};
 use smithay::delegate_xwayland_shell;
 use smithay::reexports::calloop::LoopHandle;
@@ -243,14 +244,13 @@ impl State {
             let transient_for = window
                 .is_transient_for()
                 .and_then(|parent| self.windows.id_of_x11(parent));
-            self.events.push(Event::WindowOpened {
-                id,
-                info: WindowInfo {
-                    title: window.title(),
-                    class: window.class(),
-                    transient_for,
-                },
-            });
+            let info = WindowInfo {
+                title: window.title(),
+                class: window.class(),
+                transient_for,
+            };
+            self.foreign.opened(&self.display, id, Snapshot::of(&info));
+            self.events.push(Event::WindowOpened { id, info });
             // After the window opens, so the core knows it when it is asked.
             if self.windows.take_early_x11_fullscreen(window.window_id()) {
                 self.events
@@ -312,7 +312,7 @@ impl State {
     }
 
     fn closed(&mut self, id: WinId) {
-        self.events.push(Event::WindowClosed(id));
+        self.report_closed(id);
     }
 }
 

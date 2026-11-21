@@ -3,6 +3,7 @@
 mod clipboard;
 mod decoration;
 mod dmabuf;
+mod foreign_toplevel;
 mod fullscreen;
 mod layers;
 mod outputs;
@@ -14,4 +15,5 @@ mod repeat;
 mod scale;
 mod support;
 mod window_info;
+mod workspace_list;
 mod xwayland;

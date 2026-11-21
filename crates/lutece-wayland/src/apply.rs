@@ -80,6 +80,11 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
         state.restack_x11();
     }
     state.sync_active_window();
+    for id in &restated {
+        if let Some(on) = state.windows.get(*id).map(|entry| entry.fullscreen) {
+            state.foreign.set_fullscreen(*id, on);
+        }
+    }
     for id in restated {
         if let Some(Entry {
             shell: Shell::Xdg(toplevel),
@@ -169,6 +174,7 @@ fn focus(state: &mut State, focused: Option<WinId>) {
             Shell::X11(window) => drop(window.set_activated(active)),
         }
     }
+    state.foreign.set_focus(focused);
     state.window_focus = focused
         .and_then(|id| state.windows.get(id))
         .and_then(|entry| entry.shell.focus());

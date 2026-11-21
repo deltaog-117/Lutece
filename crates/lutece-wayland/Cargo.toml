@@ -29,6 +29,10 @@ smithay = { version = "0.7.0", default-features = false, features = ["backend_wi
 thiserror = "2"
 # A second connection to Xwayland, for the window state Smithay does not read.
 x11rb = "0.14"
+# The window list for taskbars and bars, which Smithay has no server for (it has the ext variant).
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+# The workspace list for bars (`ext-workspace-v1`), which Smithay has no server for either.
+wayland-protocols = { version = "0.32", features = ["server", "staging"] }
 
 [dev-dependencies]
 lutece-layouts = { path = "../lutece-layouts" }
