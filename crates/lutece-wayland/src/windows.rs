@@ -12,6 +12,7 @@
 
 use crate::animation::Animation;
 use crate::glide::{StyleGlide, drawn_style};
+use crate::slide::Leaving;
 use lutece::{Rect, Style, WinId, WindowInfo};
 use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -62,17 +63,39 @@ pub(crate) struct Entry {
     pub(crate) animation: Option<Animation>,
     /// Its opacity and radius on their way to the values of `style`, while they glide.
     pub(crate) style_glide: Option<StyleGlide>,
+    /// The window on its way off the screen after it was hidden, with a style that slides.
+    pub(crate) leaving: Option<Leaving>,
+    /// Whether the window was ever placed. A window that was not is new and does not slide
+    /// in; one that was is coming back.
+    pub(crate) shown_before: bool,
 }
 
 impl Entry {
     /// The rectangle to draw at `now`: where the window is on its way to, or the rectangle
     /// it has reached. `None` while it is hidden.
     pub(crate) fn drawn_rect(&self, now: Instant) -> Option<Rect> {
-        let target = self.rect?;
+        let Some(target) = self.rect else {
+            return self.leaving_at(now).map(|leaving| leaving.rect_at(now));
+        };
         Some(match &self.animation {
             Some(animation) if !animation.finished(now) => animation.rect_at(now),
             _ => target,
         })
+    }
+
+    /// The slide off the screen that is still going at `now`, if the window is hidden and
+    /// has one.
+    fn leaving_at(&self, now: Instant) -> Option<&Leaving> {
+        self.leaving
+            .as_ref()
+            .filter(|leaving| !leaving.finished(now))
+    }
+
+    /// The rectangle the window is placed at, or while it slides away the one it left from:
+    /// what its client sized itself to. `None` when it is hidden and gone.
+    pub(crate) fn shown_rect(&self, now: Instant) -> Option<Rect> {
+        self.rect
+            .or_else(|| self.leaving_at(now).map(Leaving::target))
     }
 
     /// The style to draw at `now`: the style the core gave, with the opacity and radius a
@@ -173,7 +196,7 @@ impl Windows {
                 .animation
                 .is_some_and(|animation| !animation.finished(now));
             let gliding = entry.style_glide.is_some_and(|glide| !glide.finished(now));
-            moving || gliding
+            moving || gliding || entry.leaving_at(now).is_some()
         })
     }
 
@@ -206,6 +229,8 @@ impl Windows {
                 style: Style::default(),
                 animation: None,
                 style_glide: None,
+                leaving: None,
+                shown_before: false,
             },
         );
         id
@@ -429,7 +454,7 @@ impl Windows {
 
     /// The placed windows that are fullscreen (`fullscreen`) or are not, from the top of
     /// the stack down: for each, its popups (the newest first) and then the window itself.
-    /// A hidden window has no rectangle and has no layers.
+    /// A hidden window has no rectangle and has no layers, unless it is still sliding away.
     pub(crate) fn window_layers(&self, fullscreen: bool) -> Vec<Layer> {
         let now = Instant::now();
         self.order
@@ -437,7 +462,7 @@ impl Windows {
             .rev()
             .filter_map(|id| Some((*id, self.managed.get(id)?)))
             .filter(|(_, entry)| entry.fullscreen == fullscreen)
-            .filter_map(|(id, entry)| Some((id, entry, entry.rect?)))
+            .filter_map(|(id, entry)| Some((id, entry, entry.shown_rect(now)?)))
             .flat_map(|(id, entry, rect)| {
                 let title = self.infos.get(&id).map_or("", |info| info.title.as_str());
                 window_layers(id, entry, rect, title, now)

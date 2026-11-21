@@ -91,6 +91,7 @@ Author: deltaog-117
 
 - ✅ Wayland window list for bars – `zwlr_foreign_toplevel_manager_v1` in `lutece-wayland` (`foreign.rs`): title, app id, active and fullscreen state per toplevel, changes and closes, late binders, and the activate, close and fullscreen requests. Checked with ten tests against a real client, and by Quickshell reading the focused window's title, app id and active state from a nested host. Not sent: `output_enter`, `output_leave`, `parent`; X11 windows keep the title they opened with.
 - ✅ Wayland workspace list for bars – `ext_workspace_manager_v1` in `lutece-wayland` (`workspaces.rs`): one group of every workspace and every output, name, id and active state, changes, workspaces that appear or go, late binders, and `activate` after the manager's `commit` as a request to view the tag. The core's workspaces are given with `set_workspaces`. Checked with 8 tests against a real client and by a helper reading a host nested in a window of the live session, which switched the workspace. Not offered: creating, removing, deactivating or assigning a workspace, and a group for each output.
+- ✅ Workspace slide – `Glide::SLIDES`: a hidden window slides off its screen to the left and a window shown again slides in from the right, in the backend only (`slide` module, pure geometry with property tests). A new window does not slide. Fixed direction; no slide across screens. Not seen on a screen
 
 ---
 

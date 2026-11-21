@@ -1847,3 +1847,10 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-21 | Initial entry | deltaog-117 |
+
+### 2026-11-21 – Workspace slide
+
+- **Scope:** `Glide::SLIDES`. The backend's `Entry` gains `leaving` (a `Leaving`, in the new `slide` module) and `shown_before`; a hide with `SLIDES` starts a glide to one screen's width to the left instead of dropping the rectangle, and a show of a window that was shown before starts one screen to the right.
+- **Why no ghost picture:** the windows of a workspace that is left still exist, so they are drawn where the slide puts them. The close animation, which does need the picture of a window that is gone, is a separate step.
+- **Pure parts:** `off_left`, `off_right` and `Leaving` are functions of rectangles and time, with property tests (a window inside its screen ends outside it; size and row are kept; no overflow at the edge of `i32`).
+- **Not unit-tested:** `place` and the hide in `apply_changes` need a display. Not seen on a screen.

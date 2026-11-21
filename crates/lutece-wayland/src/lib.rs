@@ -46,6 +46,7 @@ mod render;
 mod scale;
 mod selection;
 mod settings;
+mod slide;
 mod title;
 mod translate;
 mod windows;

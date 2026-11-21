@@ -29,7 +29,7 @@ pub(crate) fn overlaps(a: Rect, b: Rect) -> bool {
 }
 
 /// How many pixels `a` and `b` share; none when they only touch.
-fn shared_area(a: Rect, b: Rect) -> u128 {
+pub(crate) fn shared_area(a: Rect, b: Rect) -> u128 {
     let span = |start_a: i32, len_a: u32, start_b: i32, len_b: u32| {
         let low = i64::from(start_a).max(i64::from(start_b));
         let high =

@@ -8,8 +8,9 @@ use crate::animation::Animation;
 use crate::compositor::{State, set_activated};
 use crate::error::{Error, Result};
 use crate::glide::{on_appear, on_style_change};
+use crate::slide::{Leaving, off_right};
 use crate::windows::{Entry, Shell};
-use lutece::{Change, Effect, Placement, SpawnCommand, WinId};
+use lutece::{Change, Effect, Glide, Placement, SpawnCommand, WinId};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::Rectangle;
 use std::ffi::OsStr;
@@ -36,6 +37,21 @@ pub(crate) fn apply_changes(state: &mut State, changes: &[Change]) {
         match change {
             Change::Hide(id) => {
                 if let Some(entry) = state.windows.get_mut(*id) {
+                    let now = Instant::now();
+                    // A window that is on screen and slides leaves by gliding off it; one
+                    // that is already hidden keeps the slide it has.
+                    if let Some(target) = entry.rect {
+                        entry.leaving = entry
+                            .style
+                            .glide()
+                            .contains(Glide::SLIDES)
+                            .then(|| entry.style.transition())
+                            .filter(|transition| transition.duration_ms > 0)
+                            .zip(entry.drawn_rect(now))
+                            .map(|(transition, from)| {
+                                Leaving::new(target, from, &state.screens, now, transition)
+                            });
+                    }
                     entry.rect = None;
                     // The core forgets a hidden window's fullscreen state, so the client
                     // is told, or it would come back believing it still has it.
@@ -128,14 +144,21 @@ fn place(state: &mut State, placement: &Placement, animate: bool) {
     let now = Instant::now();
     let from = entry.drawn_rect(now);
     let was_hidden = entry.rect.is_none();
+    // A window that comes back slides in from the right, unless it is still on its way out,
+    // when it simply turns round from where it is drawn.
+    let sliding_in =
+        was_hidden && entry.shown_before && entry.style.glide().contains(Glide::SLIDES);
+    let from = from.or_else(|| sliding_in.then(|| off_right(placement.rect, &state.screens)));
     entry.rect = Some(placement.rect);
+    entry.leaving = None;
+    entry.shown_before = true;
     // A window that comes on screen (a new one, or one back with its workspace) fades in if
     // its style says so; one that only moves keeps the glide it has.
     if was_hidden {
         entry.style_glide = on_appear(&entry.style, now);
     }
     entry.animation = from
-        .filter(|from| animate && *from != placement.rect)
+        .filter(|from| (animate || sliding_in) && *from != placement.rect)
         .filter(|_| entry.style.transition().duration_ms > 0)
         .map(|from| Animation::new(from, placement.rect, now, entry.style.transition()));
     let size = (
