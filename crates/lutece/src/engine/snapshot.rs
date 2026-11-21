@@ -3,6 +3,7 @@
 use super::Engine;
 use super::external::{self, Slot, Slots};
 use super::focus_hook::{Ask, Asks};
+use crate::rules::Predicate;
 use crate::shared::contracts::event::{Output, PropertyTarget, WindowInfo};
 use crate::shared::contracts::style::{Curve, Glide, Rgba, Style, Transition};
 use crate::shared::error::{Error, Result};
@@ -83,7 +84,7 @@ fn style_from(state: &StyleState) -> Style {
         .with_glide(Glide::from_bits(state.glide))
 }
 
-impl Engine {
+impl<P: Predicate> Engine<P> {
     /// What this engine knows about the session, as plain data: the windows and workspaces
     /// and where they are, the outputs, the styles and properties, and the layout and manage
     /// requests that wait for a plugin. The configuration is not part of it (see

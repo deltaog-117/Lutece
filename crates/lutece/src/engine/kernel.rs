@@ -2,6 +2,7 @@
 //! of the same name, so nothing about how the engine behaves changes.
 
 use super::Engine;
+use crate::rules::Predicate;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::event::Event;
 use crate::shared::contracts::kernel::Kernel;
@@ -9,7 +10,7 @@ use crate::shared::contracts::scene::Scene;
 use crate::shared::error::Result;
 use crate::snapshot::{Snapshot, VERSION};
 
-impl Kernel for Engine {
+impl<P: Predicate> Kernel for Engine<P> {
     type Snapshot = Snapshot;
 
     const NAME: &'static str = "workspaces";

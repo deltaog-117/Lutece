@@ -7,6 +7,7 @@
 //! Answers come in as events, so a replayed session ends in the same state.
 
 use super::Engine;
+use crate::rules::Predicate;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::ids::{Tag, WinId};
 use std::collections::BTreeMap;
@@ -27,7 +28,7 @@ pub(super) struct Ask {
 /// make them grow, and a newer close replaces an older one.
 pub(super) type Asks = BTreeMap<Tag, Ask>;
 
-impl Engine {
+impl<P: Predicate> Engine<P> {
     /// The workspace `id` has the focus of, when the focus hook is on.
     pub(super) fn focus_owner(&self, id: WinId) -> Option<Tag> {
         if !self.focus_hook {

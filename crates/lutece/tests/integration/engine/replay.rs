@@ -3,7 +3,8 @@
 use lutece::{
     Action, Change, Curve, Direction, Effect, Engine, Error, Event, Insets, KeyPress, Keymap,
     Keysym, ManageDecision, ManageRule, Match, Modifiers, Outcome, Output, OutputId, Placement,
-    Rect, Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId, WindowInfo, diff,
+    Predicate, Rect, Rules, Scene, SpawnCommand, StackSet, Style, Tag, Transition, WinId,
+    WindowInfo, diff,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -606,6 +607,50 @@ fn a_send_rule_opens_the_window_on_its_workspace_without_switching() {
 
     engine.handle(Event::FocusRequested(w(2)));
     assert_eq!(ids(&scene(&engine)), [2]);
+}
+
+/// A test written by the program, not one of the built-in criteria.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LongTitle(usize);
+
+impl std::fmt::Display for LongTitle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "title longer than {}", self.0)
+    }
+}
+
+impl Predicate for LongTitle {
+    fn matches(&self, info: &WindowInfo) -> bool {
+        info.title.chars().count() > self.0
+    }
+}
+
+#[test]
+fn an_engine_with_its_own_test_applies_its_rules_to_windows() {
+    let mut rules: Rules<LongTitle> = Rules::default();
+    rules.push(ManageRule::new(LongTitle(10), Outcome::SendTo(tag("3"))));
+    let mut engine: Engine<LongTitle> = Engine::custom(stacks(), lutece_layouts::builtin().first())
+        .with_layouts(lutece_layouts::builtin())
+        .with_rules(rules)
+        .expect("tag 3 exists");
+
+    let titled = |raw: u64, title: &str| Event::WindowOpened {
+        id: w(raw),
+        info: WindowInfo {
+            title: title.into(),
+            ..WindowInfo::default()
+        },
+    };
+    for event in [
+        screen(1000, 600),
+        titled(1, "a long document title"),
+        titled(2, "short"),
+    ] {
+        engine.handle(event);
+    }
+
+    assert_eq!(engine.stacks().tag_of(w(1)), Some(&tag("3")));
+    assert_eq!(engine.stacks().tag_of(w(2)), Some(&tag("1")));
 }
 
 #[test]

@@ -2,11 +2,12 @@
 
 use super::Engine;
 use super::external::Key;
+use crate::rules::Predicate;
 use crate::shared::contracts::scene::{Placement, Scene};
 use crate::shared::error::Result;
 use crate::shared::ids::WinId;
 
-impl Engine {
+impl<P: Predicate> Engine<P> {
     /// The scene the backend should show: the workspace on each screen, laid out in the
     /// area of its output that bars left free, with that workspace's floating windows
     /// above its tiles. A fullscreen window fills the whole output, bars included, and

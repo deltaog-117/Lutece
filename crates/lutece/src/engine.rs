@@ -13,7 +13,7 @@ mod snapshot;
 
 use crate::input::Keymap;
 use crate::layout::{LayoutName, LayoutSet};
-use crate::rules::Rules;
+use crate::rules::{Match, Predicate, Rules};
 use crate::shared::contracts::event::KeyPress;
 use crate::shared::contracts::event::Output;
 use crate::shared::contracts::event::PropertyTarget;
@@ -46,14 +46,18 @@ use std::collections::HashMap;
 /// assert_eq!(engine.scene()?.focus(), Some(WinId::new(1)));
 /// # Ok::<(), lutece::Error>(())
 /// ```
+///
+/// The type parameter is the test the rules apply to a window. It defaults to the built-in
+/// [`Match`], which is what [`Engine::new`] builds; [`Engine::custom`] builds one that uses
+/// another test.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Engine {
+pub struct Engine<P = Match> {
     stacks: StackSet,
     /// The layouts a workspace can name. Configuration, like the keymap and the rules: it
     /// is not in a snapshot, and a restore keeps the one of the engine it lands on.
     layouts: LayoutSet,
     keymap: Keymap,
-    rules: Rules,
+    rules: Rules<P>,
     /// The outputs the backend reported, and the area each one covers; empty until the
     /// backend reports any.
     outputs: Vec<Output>,
@@ -89,11 +93,20 @@ impl Engine {
     /// registered until [`with_layouts`](Self::with_layouts) gives the engine more.
     #[must_use]
     pub fn new(stacks: StackSet, layout: LayoutName) -> Self {
+        Self::custom(stacks, layout)
+    }
+}
+
+impl<P: Predicate> Engine<P> {
+    /// Builds the same engine as [`Engine::new`], whose rules use the test `P`. Its rules
+    /// start empty, as they do with `new`.
+    #[must_use]
+    pub fn custom(stacks: StackSet, layout: LayoutName) -> Self {
         Self {
             stacks: stacks.with_layout(&layout),
             layouts: LayoutSet::new(),
             keymap: Keymap::new(),
-            rules: Rules::new(),
+            rules: Rules::default(),
             outputs: Vec::new(),
             reserved: HashMap::new(),
             styles: HashMap::new(),
@@ -200,7 +213,7 @@ impl Engine {
     ///
     /// Returns [`Error::UnknownTag`] if a rule sends windows to
     /// a workspace this engine does not have.
-    pub fn with_rules(mut self, rules: Rules) -> Result<Self> {
+    pub fn with_rules(mut self, rules: Rules<P>) -> Result<Self> {
         if let Some(tag) = rules
             .tags()
             .find(|tag| !self.stacks.tags().any(|t| t == *tag))

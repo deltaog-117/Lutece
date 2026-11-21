@@ -6,6 +6,7 @@
 //! so a replayed session ends in the same state.
 
 use super::Engine;
+use crate::rules::Predicate;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::scene::Placement;
 use crate::shared::error::{Error, Result};
@@ -142,7 +143,7 @@ impl Slot {
     }
 }
 
-impl Engine {
+impl<P: Predicate> Engine<P> {
     /// Asks for a layout wherever a workspace on a screen has the external layout and no
     /// answer or request for its current windows and area.
     pub(super) fn request_layouts(&mut self, effects: &mut Vec<Effect>) {

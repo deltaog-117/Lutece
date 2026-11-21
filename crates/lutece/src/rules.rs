@@ -3,4 +3,4 @@
 
 mod manage_rule;
 
-pub use manage_rule::{ManageRule, Match, Outcome, Rules};
+pub use manage_rule::{ManageRule, Match, Outcome, Predicate, Rules};

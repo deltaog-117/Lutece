@@ -18,7 +18,47 @@ pub enum Match {
     Dialog,
 }
 
-impl Match {
+/// The test a rule applies to a window. The engine is generic over it, so a Rust program
+/// can use its own test (a type that decides from the window's fields) in place of
+/// [`Match`]. A test must be a value: the engine clones it, compares it and writes it in
+/// its state, so a closure that captures state cannot be one.
+///
+/// # Examples
+///
+/// ```
+/// use lutece::{ManageRule, Outcome, Predicate, Rules, WindowInfo};
+/// use std::fmt;
+///
+/// /// Windows whose title is longer than the given number of characters.
+/// #[derive(Debug, Clone, PartialEq, Eq)]
+/// struct LongTitle(usize);
+///
+/// impl fmt::Display for LongTitle {
+///     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+///         write!(f, "title longer than {}", self.0)
+///     }
+/// }
+///
+/// impl Predicate for LongTitle {
+///     fn matches(&self, info: &WindowInfo) -> bool {
+///         info.title.chars().count() > self.0
+///     }
+/// }
+///
+/// let mut rules: Rules<LongTitle> = Rules::default();
+/// rules.push(ManageRule::new(LongTitle(10), Outcome::Float));
+///
+/// let long = WindowInfo { title: "a very long document title".into(), ..WindowInfo::default() };
+/// assert_eq!(rules.outcome_for(&long), Some(&Outcome::Float));
+/// assert_eq!(rules.outcome_for(&WindowInfo::default()), None);
+/// ```
+pub trait Predicate: Clone + PartialEq + Eq + fmt::Debug + fmt::Display {
+    /// Whether a window with `info` meets this test. Must be a pure function of its
+    /// arguments: the engine asks again when it replays a log.
+    fn matches(&self, info: &WindowInfo) -> bool;
+}
+
+impl Predicate for Match {
     fn matches(&self, info: &WindowInfo) -> bool {
         match self {
             Self::Class(class) => info.class == *class,
@@ -56,21 +96,21 @@ pub enum Outcome {
 /// One condition and what to do with a window that meets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct ManageRule {
-    when: Match,
+pub struct ManageRule<P = Match> {
+    when: P,
     outcome: Outcome,
 }
 
-impl ManageRule {
+impl<P: Predicate> ManageRule<P> {
     /// A rule that applies `outcome` to windows that meet `when`.
     #[must_use]
-    pub const fn new(when: Match, outcome: Outcome) -> Self {
+    pub const fn new(when: P, outcome: Outcome) -> Self {
         Self { when, outcome }
     }
 
     /// What this rule looks at.
     #[must_use]
-    pub const fn when(&self) -> &Match {
+    pub const fn when(&self) -> &P {
         &self.when
     }
 
@@ -102,10 +142,16 @@ impl ManageRule {
 /// assert_eq!(rules.outcome_for(&xmessage), Some(&Outcome::Ignore));
 /// assert_eq!(rules.outcome_for(&WindowInfo::default()), None);
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct Rules {
-    rules: Vec<ManageRule>,
+pub struct Rules<P = Match> {
+    rules: Vec<ManageRule<P>>,
+}
+
+impl<P> Default for Rules<P> {
+    fn default() -> Self {
+        Self { rules: Vec::new() }
+    }
 }
 
 impl Rules {
@@ -114,10 +160,12 @@ impl Rules {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
+impl<P: Predicate> Rules<P> {
     /// Adds `rule` after the existing ones, so it only decides for windows they leave
     /// alone.
-    pub fn push(&mut self, rule: ManageRule) {
+    pub fn push(&mut self, rule: ManageRule<P>) {
         self.rules.push(rule);
     }
 
@@ -130,7 +178,7 @@ impl Rules {
     /// The first rule that matches `info` and its position (from 0), so a person can be told
     /// which rule decided; `outcome_for` is this rule's outcome.
     #[must_use]
-    pub fn matching(&self, info: &WindowInfo) -> Option<(usize, &ManageRule)> {
+    pub fn matching(&self, info: &WindowInfo) -> Option<(usize, &ManageRule<P>)> {
         self.rules
             .iter()
             .enumerate()

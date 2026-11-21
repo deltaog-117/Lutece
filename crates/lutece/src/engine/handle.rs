@@ -3,6 +3,7 @@
 use super::Engine;
 use crate::input::Action;
 use crate::rules::Outcome;
+use crate::rules::Predicate;
 use crate::shared::contracts::effect::Effect;
 use crate::shared::contracts::event::{Event, PropertyTarget, WindowInfo};
 use crate::shared::contracts::style::Style;
@@ -15,7 +16,7 @@ const MASTER_STEP: i16 = 50;
 /// How far one key press moves or resizes a floating window, in pixels.
 const FLOAT_STEP: i32 = 40;
 
-impl Engine {
+impl<P: Predicate> Engine<P> {
     /// Applies `event` and returns the effects the backend must carry out.
     ///
     /// Events that no longer apply are ignored, not reported: a backend sees close and

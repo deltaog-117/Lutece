@@ -1796,3 +1796,20 @@ Animation:
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-11-19 | Initial entry | deltaog-117 |
+| 2026-11-21 | Manage rules as a crate | A `Predicate` trait; the engine and its rules take it as a type parameter defaulting to `Match` | ✅ Confirmed |
+
+### 2026-11-21 – Manage rules behind a trait
+
+- **Scope:** the last medium-priority item of window-manager's roadmap, "manage rules as a crate". The reasoning and the COAs (A: boxed rule objects, B: a type parameter, C: a function-pointer variant) are in that repository's diary; the choice was **B**.
+- **Why not boxed objects:** the engine is a `Kernel`, which requires `Clone + PartialEq`, and it derives `Eq`. Boxed objects cannot be compared, so the engine would stop meeting the kernel contract. A function pointer compares by address, which is not reliable across builds.
+- **Shape:** `Predicate` is `Clone + PartialEq + Eq + Debug + Display` with one method, `matches(&WindowInfo)`. `Match` implements it, so its behaviour is unchanged. `ManageRule<P = Match>` and `Rules<P = Match>` hold `P`; `Engine<P = Match>` holds `Rules<P>`. `Rules` has a hand-written `Default`, because a derived one would need `P: Default`.
+- **Construction:** `Engine::new` stays on the built-in test, so no caller needs an annotation. `Engine::custom` is the constructor for another test. The engine's `impl` blocks in its several files are generic over `P`, and so is the `Kernel` impl.
+- **Snapshot and replay:** the snapshot does not store rules, and the log records what the core saw, so neither changes.
+- **Tests:** a doc example on `Predicate` (a test on the title length), and an engine test in `replay.rs` where a custom test sends one window to another workspace and leaves the other tiled. The existing rule tests are unchanged.
+- **Not done:** a test must be a value, so a closure that captures state cannot be one. Rules are still not read from a file; only the built-in test can come from configuration.
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-11-21 | Initial entry | deltaog-117 |
